@@ -53,12 +53,11 @@ def server_quit():
     if result.decode() != "BYE":
         print ("Advertencia: El servidor no ha respondido al server_quit. Cerrando conexion...")
     server_socket.close()
+    print("Desconectado del servidor de descubrimiento.")
     server_socket = None
     return 0
 
-
-
-def register_user(nickname, password, protocols, ip, port):
+def register_user(nickname, password, ip, port, protocols=["V0"]):
     '''
         Nombre: register_user
         Descripcion: Registra un usuario en el sistema.
@@ -92,7 +91,7 @@ def register_user(nickname, password, protocols, ip, port):
             print("Usuario registrado correctamente. El servidor no ha proporcionado timestamp.")
             return "0"
         #Hay timestamp
-        print("Usuario registrado correctamente en timestamp: " + words[2])
+        print("Usuario registrado correctamente en timestamp: " + words[3])
         return words[2]
     elif words[0] == "NOK" and words[1] == "WRONG_PASS":
         #Respuesta incorrecta
