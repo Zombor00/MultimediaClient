@@ -8,6 +8,8 @@
 
 import socket
 
+socket_timeout = 3 #Timeout para la conexion
+
 server_socket = None #Socket del servidor.
 server_ip = "tfg.eps.uam.es"
 server_port = 8000
@@ -27,8 +29,11 @@ def server_init():
 
     print("Conectandose al servidor de descubrimiento...")
     try:
+        server_socket.settimeout(socket_timeout)
         server_socket.connect((server_ip,server_port))
-    except TimeoutError:
+        server_socket.settimeout(None)
+    except:
+        #Timeout
         print ("No ha sido posible conectarse al servidor de descubrimiento.")
         server_socket.close()
         server_socket = None
@@ -67,7 +72,7 @@ def register_user(nickname, password, ip, port, protocols=["V0"]):
                     ip: Direccion IP desde la que escucha
                     port: Puerto desde el que escucha
         Retorno:
-            Timestamp de registro o None en caso de error.
+            Timestamp de registro, -1 en caso de clave incorrecta o None en caso de error.
     '''
     global server_socket
     if server_socket == None:
@@ -96,7 +101,7 @@ def register_user(nickname, password, ip, port, protocols=["V0"]):
     elif words[0] == "NOK" and words[1] == "WRONG_PASS":
         #Respuesta incorrecta
         print("Error registrando usuario. Contraseña incorrecta.")
-        return None
+        return -1
     #Respuesta desconocida
     print("Error desconocido registrando usuario.")
     return None

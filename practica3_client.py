@@ -3,7 +3,7 @@ from appJar import gui
 from PIL import Image, ImageTk
 import numpy as np
 import cv2
-from discovery import server_init, server_quit, register_user
+from discovery import server_init, server_quit, register_user, query_user
 import threading
 from control import control_incoming_loop, control_listen_loop,control_listen_stop,control_incoming_stop, user_filename
 import socket
@@ -70,6 +70,7 @@ class VideoClient(object):
 		print("Comenzando registro de usuario.")
 		register_nick = self.app.textBox("Inicio", "Introduce tu nick de usuario.")
 		password = self.app.textBox("Inicio", "Introduce tu contrasena.")
+
 		control_port = str(self.app.integerBox("Inicio", "Introduce tu puerto de escucha para conexiones TCP."))
 		video_port = str(self.app.integerBox("Inicio", "Introduce tu puerto para recibir video UDP."))
 		ip = socket.gethostbyname(socket.gethostname())
@@ -79,13 +80,20 @@ class VideoClient(object):
 			self.app.stop()
 			return
 
-		print("Tratando de registrar a " + register_nick + " con clave " + password + " puerto:" + control_port + " ip:" + ip + " puerto de video: " + video_port)
-		ret = register_user(register_nick,password, ip, control_port)
-		if not ret:
-			#Error
-			self.app.errorBox("Error", "No se ha podido realizar el registro correctamente. Error del servidor de descubrimiento.")
-			self.app.stop() 
-			return
+		ret = -1
+		while ret == -1:
+			print("Tratando de registrar a " + register_nick + " con clave " + password + " puerto:" + control_port + " ip:" + ip + " puerto de video: " + video_port)
+			ret = register_user(register_nick,password, ip, control_port)
+			if not ret:
+				#Error
+				self.app.errorBox("Error", "No se ha podido realizar el registro correctamente. Error del servidor de descubrimiento.")
+				self.app.stop() 
+				return
+
+			#Clave incorrecta
+			if ret == -1:
+				password = self.app.textBox("Contraseña incorrecta.", "La contraseña es incorrecta. Por favor, introduzcala de nuevo.")
+
 
 		self.app.infoBox("Registro correcto", "El registro se ha realizado correctamente.")
 		self.listen_control_port = control_port
