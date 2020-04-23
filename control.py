@@ -39,9 +39,9 @@ on_hold = False #Indica si se ha puesto la llamada en espera
 call_held = False #Indica si la otra parte ha puesto la llamada en espera.
 listen_end = False #Indica al hilo que escucha que debe parar.
 incoming_end = False #Indica al hilo que responde comandos entrantes que debe parar.
-socket_escucha = None #Socket para el hilo que escucha conexiones
 connection_barrier = threading.Semaphore(0) #Barrera que impide el paso al hilo que responde comandos si no hay conexiones activas.
 global_lock = threading.Lock() #Cerrojo para las variables globales.
+tcp_port = 0 #Puerto de control para poder cerrarlo.
 
 
 # INFORMACION 
@@ -451,7 +451,7 @@ def control_listen_loop(port):
         Retorno:
             Imprime salida por pantalla. -1 en caso de error, 0 en caso correcto.
     '''
-    global listen_end,connected_to,control_socket,on_call_with, on_hold, call_held,connection_barrier, global_lock, socket_escucha
+    global listen_end,connected_to,control_socket,on_call_with, on_hold, call_held,connection_barrier, global_lock,tcp_port
 
     socket_escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if socket_escucha == None:
@@ -459,6 +459,7 @@ def control_listen_loop(port):
         return -1
     
     #Asociar al puerto
+    tcp_port = port #Esto es para registrar el puerto.
     socket_escucha.bind(('', int(port)))
     socket_escucha.listen(5) #Escuchar
 
@@ -477,7 +478,7 @@ def control_listen_loop(port):
             with global_lock:
                 listen_end_read = listen_end
             continue
-        print ("Aceptada conexion desde " + addr)
+        print ("Aceptada conexion desde " + addr[0] + ":" + str(addr[1]))
 
         #Vemos a ver si esta intentando llamar.
         connection.settimeout(socket_timeout) #Ponemos un timeout por si no responden
@@ -529,7 +530,7 @@ def control_listen_loop(port):
             print("Llamada aceptada. Cambiando conexion de control actual...")
             control_socket = connection
             connected_to = words[1]
-            on_call_with = [addr,words[2]]
+            on_call_with = [addr[0],words[2]]
             on_hold = False
             call_held = False
             connection_barrier.release() #Levantamos la barrera de conexion
@@ -545,8 +546,14 @@ def control_listen_stop():
         Nombre: control_listen_stop
         Descripcion: Detiene la escucha de nuevas conexiones
     '''
-    global listen_end, global_lock,socket_escucha
+    global listen_end, global_lock,tcp_port
+
     with global_lock:
         listen_end = True
-        if socket_escucha:
-            socket_escucha.close()
+
+    #Evita bloqueo en accept. No basta con cerrar el socket de escucha, por desgracia:
+    #En algunos OS seguira estando bloqueado. Por tanto, nos conectam0os
+    #para desbloquear el accept en caso de que sea necesario.
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(("localhost",int(tcp_port)))
+    s.close()
