@@ -13,7 +13,7 @@
 
     1. Preparar hilos de gestion de conexiones y de gestion de comandos con las funciones de bucle provistas.
     2. Si se desea llamar, se usa connect_to(username) exclusivamente (hay otras funciones auxiliares pero por si solas no ajustan los semaforos)
-    3. Si se desea poner en espera o quitar, se usa set_hold()
+    3. Si se desea poner en espera o quitar, se usa set_on_hold()
     4. Si se desea conocer si esta en llamada, y los parametros relevantes se usa call_status()
     5. Los bucles gestionan las conexiones y comandos entrantes por si solos, de manera sincronizada.
     6. Si se desea terminar la conexion, hay que hacer call_end() y control_disconnect().
@@ -42,6 +42,8 @@ incoming_end = False #Indica al hilo que responde comandos entrantes que debe pa
 connection_barrier = threading.Semaphore(0) #Barrera que impide el paso al hilo que responde comandos si no hay conexiones activas.
 global_lock = threading.Lock() #Cerrojo para las variables globales.
 tcp_port = 0 #Puerto de control para poder cerrarlo.
+udp_port = None #Puerto de entrada de video
+username = None #Nombre de usuario propio
 
 
 # INFORMACION 
@@ -53,15 +55,18 @@ def get_username():
         Retorno:
             Nombre de usuario
     '''
+    global username
     data = None
-    try:
-        with open(user_filename, "r") as file:
-            data = json.load(file)
-    except:
-        print("Error abriendo fichero de usuario.")
-        control_disconnect() #Desconectamos del usuario actual.
-        return "Error"
-    return data["username"]
+    if not username:
+        try:
+            with open(user_filename, "r") as file:
+                data = json.load(file)
+        except:
+            print("Error abriendo fichero de usuario.")
+            control_disconnect() #Desconectamos del usuario actual.
+            return "Error"
+        username = data["username"]
+    return username
 
 def get_video_port():
     '''
@@ -71,26 +76,45 @@ def get_video_port():
         Retorno:
             Puerto en el que se recibe el video.
     '''
+    global udp_port
     data = None
-    try:
-        with open(user_filename, "r") as file:
-            data = json.load(file)
-    except:
-        print("Error abriendo fichero de usuario.")
-        control_disconnect() #Desconectamos del usuario actual.
-        return "Error"
-    return data["udp_port"]
+    if not udp_port:
+        try:
+            with open(user_filename, "r") as file:
+                data = json.load(file)
+        except:
+            print("Error abriendo fichero de usuario.")
+            control_disconnect() #Desconectamos del usuario actual.
+            return "Error"
+        udp_port = data["udp_port"]
+    return udp_port
+
+def get_connected_username():
+    '''
+        Nombre: get_connected_username
+        Descripcion: Obtiene el nombre del usuario con el que esta conectado.
+        Argumentos: 
+        Retorno:
+            Usuario con el que esta conectado o None.
+    '''
+    connected_to
+    with global_lock:
+        return connected_to
 
 
 # CONTROL SALIENTE
 
-def connect_to(username,dstport):
+def connect_to(username):
     '''
         Nombre: connect_to
         Descripcion: Inicializa la conexion de control con un usuario y lo llama.
         Argumentos: username: Nombre de usuario.
         Retorno:
-            0 si todo ha ido correctamente, -1 en caso de error.
+            En caso de que se haya aceptado, devuelve el puerto donde ha de enviarse el video, como entero.
+            En caso de error devuelve -1.
+            En caso de que el usuario destino este en llamada, devuelve -2.
+            En caso de que el usuario destino rechace la llamada, devuelve -3.
+            Siempre imprime por pantalla el resultado.
     '''
     global connected_to, on_hold, on_call_with, call_held,global_lock
 
@@ -143,8 +167,10 @@ def connect_to_addr(ip, port):
 
         print("Conectandose al usuario con ip " + ip + " y puerto " + port)
         try:
+            control_socket.settimeout(call_timeout)
             control_socket.connect((ip,int(port)))
-        except TimeoutError:
+            control_socket.settimeout(None)
+        except:
             print ("No ha sido posible conectarse al usuario. El usuario no ha aceptado la conexion en el tiempo establecido.")
             control_socket.close()
             control_socket = None
@@ -165,7 +191,6 @@ def control_disconnect():
     with global_lock:
 
     #Zona protegida porque altera el estado.
-
         if control_socket == None:
             print ("Se ha intentado enviar un comando por la conexion de control sin estar conectado a el.")
             return -1
@@ -176,8 +201,7 @@ def control_disconnect():
         connected_to = None
         on_hold = False
         on_call_with = [None, None]
-        connection_barrier.acquire() #Bajamos el semaforo de conexion
-
+    connection_barrier.acquire() #Bajamos el semaforo de conexion
     return 0
 
 def call(dstport):
@@ -201,15 +225,21 @@ def call(dstport):
             return None
         mensaje = "CALLING " + get_username() + " " + str(dstport)
         control_socket.send(mensaje.encode())
-        control_socket.settimeout(call_timeout)
-        try:
-            result = control_socket.recv(1024)
-        except:
-            print("Error iniciando llamada: el otro lado no ha respondido. Cerrando conexion...")
-            connection_barrier.release() #Para que pueda hacerse la desconexion
-            control_disconnect()
-            return -1
-        control_socket.settimeout(None)
+
+    with global_lock:
+        #Por si cambia la conexion, guardamos el socket actual. Esto es para no bloquear el lock durante receive que puede tardar.
+        control_socket_read = control_socket
+
+    try:
+        #try except por si nos han cerrado el socket, y para el timeout.
+        control_socket_read.settimeout(call_timeout)
+        result = control_socket_read.recv(1024)
+        control_socket_read.settimeout(None)
+    except:
+        print("Error iniciando llamada: el otro lado no ha respondido. Cerrando conexion...")
+        connection_barrier.release() #Para que pueda hacerse la desconexion
+        control_disconnect()
+        return -1
 
     connection_barrier.release() #Subimos el semaforo de conexion, ya solo leera el otro hilo
 
@@ -223,13 +253,13 @@ def call(dstport):
     if len(words) == 0:
         #No hay respuesta suficiente
         print ("Error llamando usuario. El destinatario no respondio.")
-        return None
+        return -1
     elif words[0] == "CALL_ACCEPTED":
         #Acepta llamada
         if len(words) < 3:
             #Faltan datos
             print("Error en la respuesta del destinatario. No ha devuelto nick o puerto destino.")
-            return None
+            return -1
         #Hay timestamp
         print("Llamada aceptada por destinatario. Desea puerto: " + words[2])
         with global_lock:
@@ -307,11 +337,11 @@ def end_call():
         #Si no hay conexiones, error.
         if control_socket == None or connected_to == None:
             print ("Error finalizando llamada: no esta conectado con ningun usuario.")
-            return None
+            return -1
 
         if on_call_with[0] == None or on_call_with[1] == None:
             print ("Error finalizando llamada: no esta en llamada.")
-            return None
+            return -1
 
         mensaje = "CALL_END " + get_username()
         control_socket.send(mensaje.encode())
@@ -345,11 +375,12 @@ def call_status():
 #CONTROL ENTRANTE
 
 #Esta rutina se ejecutara en un hilo aparte de las demas, para controlar los comandos que entran.
-def control_incoming_loop():
+def control_incoming_loop(gui):
     '''
         Nombre: control_incoming_loop
         Descripcion: Gestiona el control entrante.
         Argumentos:
+            gui: Interfaz para mostrar informacion
         Retorno:
             Imprime salida por pantalla. -1 en caso de error, 0 en caso correcto.
     '''
@@ -370,10 +401,13 @@ def control_incoming_loop():
             try:
                 msg = control_socket.recv(1024) #Recibimos mensaje
             except:
-                #Esto sucede ante una desconexion desde nuestro lado. Simplemente seguimos.
                 connection_barrier.release()
-                continue
-            if not msg: #La unica posibilidad de fallo es que el otro cierre la conexion.
+                control_disconnect()
+                print("Cerrando conexion de control actual ante el cierre por la parte contraria.")
+                with global_lock:
+                    incoming_end_read = incoming_end
+                continue 
+            if not msg: #Si el otro cierra la conexion (EOF).
                 connection_barrier.release()
                 control_disconnect() #Cerramos la nuestra
                 print("Cerrando conexion de control actual ante el cierre por la parte contraria.")
@@ -381,7 +415,7 @@ def control_incoming_loop():
                     incoming_end_read = incoming_end
                 continue
             
-            msg.decode()
+            msg = msg.decode()
 
             print("Hilo de procesado de mensajes recibe: " + msg)
         else:
@@ -400,12 +434,12 @@ def control_incoming_loop():
                 incoming_end_read = incoming_end
             continue
 
-        if(words[0] == "CALL_HOLD" and len(words) < 2):
+        if(words[0] == "CALL_HOLD" and len(words) >= 2):
             print("El usuario " + words[1] + " pone la llamada en espera.")
             #Poner en espera
             with global_lock:
                 call_held = True
-        elif(words[0] == "CALL_RESUME" and len(words) < 2):
+        elif(words[0] == "CALL_RESUME" and len(words) >= 2):
             print("El usuario " + words[1] + " retira su espera.")
             #Quitar espera
             with global_lock:
@@ -420,6 +454,7 @@ def control_incoming_loop():
         if will_end:
             control_disconnect()
             will_end = False
+            gui.infoBox("Llamada finalizada.", "El otro usuario ha terminado la llamada.")
 
         #Recuperamos el estado del bucle
         with global_lock:
@@ -442,12 +477,13 @@ def control_incoming_stop():
 
 #Esta rutina se ejecutara en un hilo aparte de las demas, para poder estar a la escucha. Por tanto usaremos Locks para proteger
 #las globales que modifique
-def control_listen_loop(port):
+def control_listen_loop(port,gui):
     '''
         Nombre: control_listen_loop
         Descripcion: Establece un socket TCP a la escucha en el puerto pasado y gestiona las nuevas conexiones.
         Argumentos:
                 port: puerto de escucha como cadena. Por ejemplo "1234"
+                gui: Objeto interfaz grafica para mostrar una informacion cuando nos esten llamando.
         Retorno:
             Imprime salida por pantalla. -1 en caso de error, 0 en caso correcto.
     '''
@@ -461,14 +497,15 @@ def control_listen_loop(port):
     #Asociar al puerto
     tcp_port = port #Esto es para registrar el puerto.
     socket_escucha.bind(('', int(port)))
+
     socket_escucha.listen(5) #Escuchar
 
     with global_lock:
         listen_end_read = listen_end
 
+    #Bucle que se ejecutara continuamente.
+    print("Hilo de escucha de peticiones operativo en puerto: " + port)
     while not listen_end_read:
-        #Bucle que se ejecutara continuamente.
-        print("Hilo de escucha de peticiones operativo en puerto: " + port)
 
         #Aceptar conexion
         try:
@@ -498,12 +535,13 @@ def control_listen_loop(port):
                 listen_end_read = listen_end
             continue
 
-        msg.decode()
+        msg = msg.decode()
         words = msg.split()
 
+        print("Conexion entrante pide: " + msg)
         #Si no esta intentando llamar cerramos
         if(len(words) < 3 or words[0] != "CALLING"):
-            print("Llamada denegada por peticion malformada.")
+            print("Llamada denegada por peticion malformada: " + msg)
             end_call = "CALL_DENIED " + get_username()
             connection.send(end_call.encode())
             connection.close()
@@ -516,14 +554,22 @@ def control_listen_loop(port):
             connected_to_read = connected_to
             control_socket_read = control_socket
         if(connected_to_read != None or control_socket_read != None):
-            print("Ya hay una conexion activa. Respondiendo como llamada ocupada.")
+            print("Ya hay una conexion activa. Respondiendo a " + words[1] + " como llamada ocupada.")
             connection.send(b'CALL_BUSY')
             connection.close()
             with global_lock:
                 listen_end_read = listen_end
             continue
-
-        #TODO Comprobar si el usuario ha rechazado la conexion
+        #Comprobar si el usuario rechaza la conexion
+        accepted = gui.yesNoBox("Llamada entrante.", words[1] + " esta llamando. Desea coger la llamada?")
+        if not accepted:
+            print("Llamada rechazada. Informando a " + words[1] + " y cortando su conexion...")
+            call_denied = "CALL_DENIED " + get_username()
+            connection.send(call_denied.encode())
+            connection.close()
+            with global_lock:
+                listen_end_read = listen_end
+            continue
 
         #Si no, esta pasa a ser la conexion actual
         with global_lock:
@@ -535,9 +581,12 @@ def control_listen_loop(port):
             call_held = False
             connection_barrier.release() #Levantamos la barrera de conexion
             start_call = "CALL_ACCEPTED " + get_username() + " " + get_video_port()
-            connection.send(start_call)
+            sent = connection.send(start_call.encode())
             listen_end_read = listen_end
+        if not sent: #Esto ocurre si antes de que aceptemos nos han cerrado.
+            control_disconnect()
 
+    socket_escucha.close()
     print("Hilo de escucha de peticiones saliendo...")
     return 0
 

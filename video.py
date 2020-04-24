@@ -8,6 +8,8 @@
 
 import socket
 import time
+import cv2
+import numpy as np
 
 def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
     encimg = compress(frame,quality)
@@ -36,4 +38,4 @@ def decompress(encimg):
     #cv2_im = cv2.cvtColor(decimg,cv2.COLOR_BGR2RGB)
     #img_tk = ImageTk.PhotoImage(Image.fromarray(cv2_im))
 
-    return img_tk
+    #return img_tk
