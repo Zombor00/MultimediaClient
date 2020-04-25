@@ -13,9 +13,11 @@ import numpy as np
 
 def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
     encimg = compress(frame,quality)
-    header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + fps + "#"
-    message = bytearray(header + encimg)
+    header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + str(fps) + "#"
+    header = bytes(header,"ascii")
+    message = header + encimg
     lengthTot = len(message)
+
     lengthSend = socket_video.sendto(message,status)
     if(lengthSend != lengthTot):
         return -1
@@ -28,7 +30,7 @@ def compress(frame,quality):
 
     if result == False: print('Error al codificar imagen')
 
-    return encimg
+    return encimg.tostring()
 
 def decompress(encimg):
     # Descompresión de los datos, una vez recibidos
