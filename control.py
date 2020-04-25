@@ -26,7 +26,7 @@ import threading
 import json
 
 # Parametros
-socket_timeout = 3 #Timeout para receive en casos criticos.
+socket_timeout = 2 #Timeout para receive en casos criticos.
 call_timeout = 15 #Timeout para responder a la llamada
 user_filename = "usuario.json" #Fichero de usuario
 
@@ -167,7 +167,7 @@ def connect_to_addr(ip, port):
 
         print("Conectandose al usuario con ip " + ip + " y puerto " + port)
         try:
-            control_socket.settimeout(call_timeout)
+            control_socket.settimeout(socket_timeout)
             control_socket.connect((ip,int(port)))
             control_socket.settimeout(None)
         except:

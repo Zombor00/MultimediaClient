@@ -155,9 +155,10 @@ class VideoClient(object):
                 self.startTime = time.time()
                 self.socket_video_rec.bind(('',int(get_video_port())))
 
-            #EN LLAMADA. #TODO en el campo 1 de la statusbar poner info: DURACION; FPS... Una vez mas hace falta detectar reinicios en call_status.
+            #EN LLAMADA.
+            #TODO Statusbar tambien en espera y reiniciar campo 1 al colgar.
             self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
-            self.app.setStatusbar("Duracion: " + str(time.time() - self.startTime) ,field=1)
+            self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=1)
 
             #Enviamos el frame
             errorSend = send_frame(self.socket_video_send, (status[0],int(status[1])), frame, self.num, 50, "640x480", 40)
@@ -165,18 +166,23 @@ class VideoClient(object):
                 print("Error sending message")
             self.num += 1
 
-            #Leemos el frame que nos envian
-            data, _ = self.socket_video_rec.recvfrom(1024)
-            frame_rec = decompress(data)
+            #TODO receives en un hilo
 
-            frame_peque = cv2.resize(frame, (320,240)) # ajustar tamaño de la imagen pequeña
+
+            ##TODO cambiar por pop del heapq
+            data, _ = self.socket_video_rec.recvfrom(65535)
+            frame_rec = decompress(data)[1]
+
+            frame_peque = cv2.resize(frame, (160,120)) # ajustar tamaño de la imagen pequeña
             frame_compuesto = frame_rec
             frame_compuesto[0:frame_peque.shape[0], 0:frame_peque.shape[1]] = frame_peque
             frame = frame_compuesto
 
         elif status[0] == "HOLD1":
+            #TODO imagen en espera
             self.app.setStatusbar("Llamada en espera por " + get_username() ,field=0)
         elif status[0] == "HOLD2":
+            #TODO imagen en espera
             self.app.setStatusbar("Llamada en espera por " + get_connected_username() ,field=0)
         elif get_connected_username() != None:
             self.app.setStatusbar("Llamando a " + get_connected_username(),field=0)

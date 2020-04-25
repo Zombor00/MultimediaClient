@@ -14,7 +14,7 @@ import numpy as np
 def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
     encimg = compress(frame,quality)
     header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + str(fps) + "#"
-    header = bytes(header,"ascii")
+    header = header.encode()
     message = header + encimg
     lengthTot = len(message)
 
@@ -34,10 +34,24 @@ def compress(frame,quality):
 
 def decompress(encimg):
     # Descompresión de los datos, una vez recibidos
-    decimg = cv2.imdecode(np.frombuffer(encimg,np.uint8), 1)
+    # DEVUELVE LISTA CON CABECERAS (COMO STRING) Y LA IMAGEN.
+    count = 0
+    ENCODED_HASHTAG = 35 #Codigo de la almohadilla (Si no no funciona)
+    for i in range(0, len(encimg)):
+        if encimg[i] == ENCODED_HASHTAG:
+            count +=1
+            if count == 4:
+                break
+    
+    if(i == len(encimg)):
+        print("Error en el datagrama.")
+        return None
 
-    # Conversión de formato para su uso en el GUI
-    #cv2_im = cv2.cvtColor(decimg,cv2.COLOR_BGR2RGB)
-    #img_tk = ImageTk.PhotoImage(Image.fromarray(cv2_im))
+    header = encimg[:i]
+    content = encimg[i+1:]
+    header = header.decode()
+    header = header.split("#")
+    decimg = cv2.imdecode(np.frombuffer(content,np.uint8), 1)
 
-    #return img_tk
+    return header, decimg
+
