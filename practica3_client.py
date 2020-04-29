@@ -9,7 +9,7 @@ import json
 import time
 from discovery import server_init, server_quit, register_user, query_user
 from control import *
-from video import send_frame, decompress
+from video import *
 
 
 
@@ -23,6 +23,8 @@ class VideoClient(object):
     socket_video_send = None
     socket_video_rec = None
     num = 0
+    buffer_video = None
+    buffer_block = [True]
 
     def __init__(self, window_size):
 
@@ -123,9 +125,19 @@ class VideoClient(object):
         self.app.infoBox("Registro correcto", "El registro se ha realizado correctamente.")
         self.listen_control_port = control_port
 
+        #Iniciamos el buffer de video
+        self.buffer_video = list()
+        self.buffer_block = [True]
+
+        #Iniciamos los sockets de video
+        self.socket_video_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket_video_rec = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket_video_rec.bind(('',int(video_port)))
+
         #Hilos de recepcion
         self.connection_loop = threading.Thread(target=control_listen_loop, args = (self.listen_control_port,self.app))
         self.command_loop = threading.Thread(target=control_incoming_loop, args = (self.app,))
+        self.receive_loop = threading.Thread(target=receive_frame, args = (self.socket_video_rec, self.buffer_video, self.buffer_block))
         self.connection_loop.start()
         self.command_loop.start()
 
@@ -133,9 +145,8 @@ class VideoClient(object):
         with open(user_filename, "w+") as file:
             json.dump(user_data,file, indent=4)
 
-        #Iniciamos los sockets de video
-        self.socket_video_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket_video_rec = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+
 
     # Función que captura el frame a mostrar en cada momento
     def capturaVideo(self):
@@ -153,7 +164,8 @@ class VideoClient(object):
                 self.num = 0
                 self.boolResetFrame = 0
                 self.startTime = time.time()
-                self.socket_video_rec.bind(('',int(get_video_port())))
+                self.receive_loop.start()
+                print("Hilo de recepción de video iniciado.")
 
             #EN LLAMADA.
             #TODO Statusbar tambien en espera y reiniciar campo 1 al colgar.
@@ -166,30 +178,35 @@ class VideoClient(object):
                 print("Error sending message")
             self.num += 1
 
-            #TODO receives en un hilo
-
-
-            ##TODO cambiar por pop del heapq
-            data, _ = self.socket_video_rec.recvfrom(65535)
-            frame_rec = decompress(data)[1]
-
-            frame_peque = cv2.resize(frame, (160,120)) # ajustar tamaño de la imagen pequeña
-            frame_compuesto = frame_rec
-            frame_compuesto[0:frame_peque.shape[0], 0:frame_peque.shape[1]] = frame_peque
-            frame = frame_compuesto
+            #Popeamos el elemento a mostrar
+            frame_rec = pop_frame(self.buffer_video,self.buffer_block)
+            if(frame_rec.size != 0):
+                frame_peque = cv2.resize(frame, (160,120)) # ajustar tamaño de la imagen pequeña
+                frame_compuesto = frame_rec
+                frame_compuesto[0:frame_peque.shape[0], 0:frame_peque.shape[1]] = frame_peque
+                frame = frame_compuesto
 
         elif status[0] == "HOLD1":
             #TODO imagen en espera
             self.app.setStatusbar("Llamada en espera por " + get_username() ,field=0)
+            self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=1)
         elif status[0] == "HOLD2":
             #TODO imagen en espera
             self.app.setStatusbar("Llamada en espera por " + get_connected_username() ,field=0)
+            self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=1)
         elif get_connected_username() != None:
             self.app.setStatusbar("Llamando a " + get_connected_username(),field=0)
         else:
             self.app.setStatusbar("Cliente listo para llamar.",field=0)
+            self.app.setStatusbar("" ,field=1)
             if(self.boolResetFrame != 1):
-                self.boolResetFrame = 0
+                self.buffer_block = [True]
+                self.boolResetFrame = 1
+                self.buffer_video = list()
+                self.socket_video_send.sendto(b'END_RECEPTION',('',get_video_port()))
+                self.receive_loop.join()
+                print("Hilo de recepción de video recogido.")
+
 
         #Mostramos por la GUI ambas webcams o solo la nuestra si no hay ninguna llamada
         cv2_im = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
