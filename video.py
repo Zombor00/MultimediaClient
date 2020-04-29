@@ -23,7 +23,10 @@ def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
     message = header + encimg
     lengthTot = len(message)
 
-    lengthSend = socket_video.sendto(message,status)
+    try:
+        lengthSend = socket_video.sendto(message,status)
+    except:
+        print("UDP Error: El frame no entra en el datagrama.")
     if(lengthSend != lengthTot):
         return -1
     return 0
@@ -42,8 +45,8 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
 
         if(data != None and video_length < 1024):
             header,decimg = decompress(data)
-            #Eliminamos los elementos anteriores al ultimo extraido
 
+            #Eliminamos los elementos anteriores al ultimo extraido
             with buffer_lock:
                 if(buffer_num < int(header[0])):
                     heapq.heappush(buffer_video,(int(header[0]),decimg))
