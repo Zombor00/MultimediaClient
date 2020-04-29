@@ -34,7 +34,7 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
     while True:
         data, _ = socket_video_rec.recvfrom(65535)
 
-        if(data == b"END_RECEPTION"):
+        if(data == b'END_RECEPTION'):
             return
 
         with buffer_lock:

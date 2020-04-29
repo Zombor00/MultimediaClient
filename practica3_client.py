@@ -137,7 +137,6 @@ class VideoClient(object):
         #Hilos de recepcion
         self.connection_loop = threading.Thread(target=control_listen_loop, args = (self.listen_control_port,self.app))
         self.command_loop = threading.Thread(target=control_incoming_loop, args = (self.app,))
-        self.receive_loop = threading.Thread(target=receive_frame, args = (self.socket_video_rec, self.buffer_video, self.buffer_block))
         self.connection_loop.start()
         self.command_loop.start()
 
@@ -164,6 +163,7 @@ class VideoClient(object):
                 self.num = 0
                 self.boolResetFrame = 0
                 self.startTime = time.time()
+                self.receive_loop = threading.Thread(target=receive_frame, args = (self.socket_video_rec, self.buffer_video, self.buffer_block))
                 self.receive_loop.start()
                 print("Hilo de recepción de video iniciado.")
 
@@ -203,7 +203,7 @@ class VideoClient(object):
                 self.buffer_block = [True]
                 self.boolResetFrame = 1
                 self.buffer_video = list()
-                self.socket_video_send.sendto(b'END_RECEPTION',('',get_video_port()))
+                self.socket_video_send.sendto(b'END_RECEPTION',('',int(get_video_port())))
                 self.receive_loop.join()
                 print("Hilo de recepción de video recogido.")
 
