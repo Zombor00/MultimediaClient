@@ -73,7 +73,7 @@ class VideoClient(object):
         self.app.addSecretEntry("passInput",2,2)
         self.app.addNumericEntry("tcpInput",3,2)
         self.app.addNumericEntry("udpInput",4,2)
-        
+
         self.app.setPadding([20,20])
         self.app.addButton("Entrar", self.login,5,1)
         self.app.setStopFunction(self.app.stop) #Parar la ventana cierra la app.
@@ -190,7 +190,7 @@ class VideoClient(object):
         # Capturamos un frame de la cámara o del vídeo
         ret, frame = self.cap.read()
         frame_rec = np.array([]) #Frame capturado del otro
-        
+
         #Bucle si el video acaba
         if not ret:
             self.cap = cv2.VideoCapture(self.currently_playing_file)
@@ -219,7 +219,6 @@ class VideoClient(object):
 
             #EN LLAMADA.
             self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
-            self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=1)
 
             #Enviamos el frame
             errorSend = send_frame(self.socket_video_send, (status[0],int(status[1])), frame, self.num, 50, "640x480", 40)
@@ -228,14 +227,20 @@ class VideoClient(object):
             self.num += 1
 
             #Popeamos el elemento a mostrar
-            frame_rec = pop_frame(self.buffer_video,self.buffer_block)
+            num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block)
+
+            #Actualizamos la GUI
+            if(len(header) >= 4):
+                self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) + " FPS: " + str(header[3]) + " Resolution: " + str(header[2]) ,field=1)
+            else:
+                self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) ,field=1)
 
         elif status[0] == "HOLD1":
             frame_rec = cv2.imread("imgs/call_held.png")
             frame_rec = cv2.resize(frame_rec, (640,480))
             #EN ESPERA POR NUESTRA PARTE
             self.app.setStatusbar("Llamada en espera por " + get_username() ,field=0)
-            self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=1)
+            self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime) ) ,field=1)
 
         elif status[0] == "HOLD2":
             frame_rec = cv2.imread("imgs/call_held.png")
@@ -273,8 +278,8 @@ class VideoClient(object):
         cv2_im = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
         img_tk = ImageTk.PhotoImage(Image.fromarray(cv2_im))
         self.app.setImageData("video", img_tk, fmt = 'PhotoImage')
-            
-        
+
+
 
 
     # Establece la resolución de la imagen capturada

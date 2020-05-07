@@ -11,14 +11,14 @@ import socket
 socket_timeout = 3 #Timeout para la conexion
 
 server_socket = None #Socket del servidor.
-server_ip = "tfg.eps.uam.es"
+server_ip = "vega.ii.uam.es"
 server_port = 8000
 
 def server_init():
     '''
         Nombre: server_init
         Descripcion: Inicializa la conexion con el servidor
-        Argumentos: 
+        Argumentos:
         Retorno:
             0 si todo ha ido correctamente, -1 en caso de error.
     '''
@@ -45,7 +45,7 @@ def server_quit():
     '''
         Nombre: server_quit
         Descripcion: Termina la conexion con el servidor, informando al server y limpiando recursos.
-        Argumentos: 
+        Argumentos:
         Retorno:
             0 si todo ha ido correctamente, -1 en caso de error.
     '''

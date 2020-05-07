@@ -46,12 +46,12 @@ udp_port = None #Puerto de entrada de video
 username = None #Nombre de usuario propio
 
 
-# INFORMACION 
+# INFORMACION
 def get_username():
     '''
         Nombre: get_username
         Descripcion: Obtiene el nombre de usuario propio.
-        Argumentos: 
+        Argumentos:
         Retorno:
             Nombre de usuario
     '''
@@ -72,7 +72,7 @@ def get_video_port():
     '''
         Nombre: get_video_port
         Descripcion: Obtiene el puerto en el que se recibe el video.
-        Argumentos: 
+        Argumentos:
         Retorno:
             Puerto en el que se recibe el video.
     '''
@@ -93,7 +93,7 @@ def get_connected_username():
     '''
         Nombre: get_connected_username
         Descripcion: Obtiene el nombre del usuario con el que esta conectado.
-        Argumentos: 
+        Argumentos:
         Retorno:
             Usuario con el que esta conectado o None.
     '''
@@ -132,7 +132,7 @@ def connect_to(username):
         return -1
     if connect_to_addr(ret[0],ret[1]) == -1:
         return -1
-    
+
     #Ajuste de parametros
     with global_lock:
         connected_to = username
@@ -140,7 +140,7 @@ def connect_to(username):
         call_held = False
         on_call_with = [ret[0], None] #Vamos ajustando la IP de video
     return call(int(get_video_port())) #Se efectua la llamada
-    
+
 def connect_to_addr(ip, port):
     '''
         Nombre: connect_to_addr
@@ -153,8 +153,8 @@ def connect_to_addr(ip, port):
     global control_socket, connected_to, on_hold,global_lock
 
     with global_lock:
-        #Zona protegida porque tocamos el socket global. 
-        #Ademas esto se ejecuta puntualmente (cuando el usuario llama), asi que no 
+        #Zona protegida porque tocamos el socket global.
+        #Ademas esto se ejecuta puntualmente (cuando el usuario llama), asi que no
         #interfiere en exceso con los hilos en bucle.
 
         if(control_socket != None):
@@ -182,7 +182,7 @@ def control_disconnect():
     '''
         Nombre: control_disconnect
         Descripcion: Finaliza la conexion de control saliente abierta previamente.
-        Argumentos: 
+        Argumentos:
         Retorno:
             0 si todo ha ido correctamente, -1 en caso de error.
     '''
@@ -396,7 +396,7 @@ def control_incoming_loop(gui):
         with global_lock:
             if control_socket:
                 print("Conexion detectada. Hilo de procesado de mensajes intentando recibir...")
-        
+
         if(control_socket != None):
             try:
                 msg = control_socket.recv(1024) #Recibimos mensaje
@@ -406,7 +406,7 @@ def control_incoming_loop(gui):
                 print("Cerrando conexion de control actual ante el cierre por la parte contraria.")
                 with global_lock:
                     incoming_end_read = incoming_end
-                continue 
+                continue
             if not msg: #Si el otro cierra la conexion (EOF).
                 connection_barrier.release()
                 control_disconnect() #Cerramos la nuestra
@@ -414,7 +414,7 @@ def control_incoming_loop(gui):
                 with global_lock:
                     incoming_end_read = incoming_end
                 continue
-            
+
             msg = msg.decode()
 
             print("Hilo de procesado de mensajes recibe: " + msg)
@@ -493,7 +493,7 @@ def control_listen_loop(port,gui):
     if socket_escucha == None:
         print("Error abriendo socket para escuchar conexiones de control.")
         return -1
-    
+
     #Asociar al puerto
     tcp_port = port #Esto es para registrar el puerto.
     socket_escucha.bind(('', int(port)))
