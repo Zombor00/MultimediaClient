@@ -158,8 +158,17 @@ def list_users():
         return None
     mensaje = "LIST_USERS"
     server_socket.send(mensaje.encode())
-    result = server_socket.recv(1024)
-    words = result.decode().split()
+
+    #Recibir la cantidad adecuada de usuarios
+    continue_receiving = True
+    result = bytes()
+    while continue_receiving:
+        result += server_socket.recv(1024)
+        result_str = result.decode()
+        words = result_str.split() #Queremos la tercera palabra que trae cuantos users hay
+        if int(words[2]) == result_str.count("#"):
+            continue_receiving = False
+            
     if len(words) < 2:
         #No hay respuesta suficiente
         print ("Error listando usuarios. El servidor no respondio.")

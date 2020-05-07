@@ -16,7 +16,8 @@ import heapq
 buffer_lock = threading.Lock()
 buffer_num = 0
 
-'''
+def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
+    '''
     Nombre: send_frame
     Descripcion: Envia un frame comprimido a la ip/puerto indicados.
     Argumentos: socket_video: Socket UDP con el que se envia el frame.
@@ -29,8 +30,7 @@ buffer_num = 0
     Retorno:
         En caso de que no haya errores devuelve 0
         En caso de error devuelve -1.
-'''
-def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
+    '''
     encimg = compress(frame,quality)
     header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + str(fps) + "#"
     header = header.encode()
@@ -40,12 +40,16 @@ def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
     try:
         lengthSend = socket_video.sendto(message,status)
     except:
+        lengthSend = -1
         print("UDP Error: El frame no entra en el datagrama.")
+
     if(lengthSend != lengthTot):
         return -1
     return 0
 
-'''
+
+def receive_frame(socket_video_rec,buffer_video,buffer_block):
+    '''
     Nombre: receive_frame
     Descripcion: Funcion que va recibiendo frames, descomprimiendolos e incluyendolos en un
                 heap.
@@ -54,8 +58,7 @@ def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
                 buffer_block: Semáforo para acceder al heap.
     Retorno:
         None
-'''
-def receive_frame(socket_video_rec,buffer_video,buffer_block):
+    '''
     global buffer_num
     timemax = -1
     buffer_num = -65535
@@ -73,7 +76,7 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
             timestamp = float(header[1])
 
             if(timemax == -1):
-                timemax = time.time() - timestamp + 0.1
+                timemax = time.time() - timestamp + 0.04
 
             #Eliminamos los elementos anteriores al ultimo extraido
             with buffer_lock:
@@ -82,7 +85,9 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
                 #TODO Evitar que se haga esta comparación todo el rato
                 if(len(buffer_video) > 10):
                     buffer_block[0] = False
-'''
+
+def pop_frame(buffer,block):
+    '''
     Nombre: pop_frame
     Descripcion: Extrae un elemento del buffer. Cada elemento es una tripla que
                  contiene el numero de frame, el header y el frame.
@@ -94,9 +99,7 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
         de frame, el segundo elemento es el header y el último el propio frame descomprimido.
         - Si el buffer esta bloqueado se devuelven 3 elementos: -1, una lista vacia
         y un numpy array vacio.
-'''
-
-def pop_frame(buffer,block):
+    '''
     global buffer_num
     if(not block[0]):
         if(len(buffer) == 1):
@@ -111,7 +114,9 @@ def pop_frame(buffer,block):
     else:
         return -1, list(), np.array([])
 
-'''
+
+def compress(frame,quality):
+    '''
     Nombre: compress
     Descripcion: Comprime un frame.
     Argumentos: frame: Frame que se va a comprimir.
@@ -119,8 +124,7 @@ def pop_frame(buffer,block):
     Retorno:
         - Si no hay errores se devuelve el frame comprimido.
         - Si hay error al comprimir se devuelve None.
-'''
-def compress(frame,quality):
+    '''
     # Compresión JPG al 50% de resolución (se puede variar)
     encode_param = [cv2.IMWRITE_JPEG_QUALITY,quality]
     result,encimg = cv2.imencode('.jpg',frame,encode_param)
@@ -131,15 +135,16 @@ def compress(frame,quality):
 
     return encimg.tostring()
 
-'''
+
+def decompress(encimg):
+    '''
     Nombre: decompress
     Descripcion: Descomprime un frame.
     Argumentos: frame: Frame que se va a descomprimir.
     Retorno:
         - Si no hay errores se devuelve el header del mensaje y el frame descomprimido.
         - Si hay error al comprimir se devuelve None.
-'''
-def decompress(encimg):
+    '''
     count = 0
     ENCODED_HASHTAG = 35 #Codigo de la almohadilla (Si no no funciona)
     for i in range(0, len(encimg)):
