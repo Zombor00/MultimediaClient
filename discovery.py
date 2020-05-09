@@ -166,7 +166,11 @@ def list_users():
         result += server_socket.recv(1024)
         result_str = result.decode()
         words = result_str.split() #Queremos la tercera palabra que trae cuantos users hay
-        if int(words[2]) == result_str.count("#"):
+
+        #¿Por que este codigo tan raro, en lugar de result_str.count(#)? Pues porque algun
+        #gracioso se ha puesto de username: "mua#ja#ja#ja", y el server no lo prohibe.
+        #Por tanto contamos como maximo un # por palabra...
+        if int(words[2]) <= len([1 for e in words[3:] if '#' in e]):
             continue_receiving = False
             
     if len(words) < 2:

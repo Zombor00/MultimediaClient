@@ -193,14 +193,19 @@ def control_disconnect():
     #Zona protegida porque altera el estado.
         if control_socket == None:
             print ("Se ha intentado enviar un comando por la conexion de control sin estar conectado a el.")
+            #Reseteamos parametros
+            on_call_with = [None, None]
+            control_socket = None
+            connected_to = None
+            on_hold = False
             return -1
-        control_socket.close()
 
+        control_socket.close()
         #Reinicio de variables
+        on_call_with = [None, None]
         control_socket = None
         connected_to = None
         on_hold = False
-        on_call_with = [None, None]
     connection_barrier.acquire() #Bajamos el semaforo de conexion
     return 0
 
@@ -246,6 +251,7 @@ def call(dstport):
     if not result:
         #El otro ha cerrado la conexion. El hilo de procesado de comandos cerrara nuestro lado. Salimos
         print("Error iniciando llamada: el otro extremo ha cerrado la conexion.")
+        control_disconnect()
         return -1
 
     #Obtenemos las palabras de la respuesta
@@ -278,6 +284,7 @@ def call(dstport):
         return -2
     #Respuesta desconocida
     print("Error desconocido llamando.")
+    control_disconnect()
     return None
 
 def set_on_hold(held):
@@ -403,14 +410,14 @@ def control_incoming_loop(gui):
             except:
                 connection_barrier.release()
                 control_disconnect()
-                print("Cerrando conexion de control actual ante el cierre por la parte contraria.")
+                print("Cerrando conexion de control (procesado de mensajes) actual ante el cierre por la parte contraria.")
                 with global_lock:
                     incoming_end_read = incoming_end
                 continue
             if not msg: #Si el otro cierra la conexion (EOF).
                 connection_barrier.release()
                 control_disconnect() #Cerramos la nuestra
-                print("Cerrando conexion de control actual ante el cierre por la parte contraria.")
+                print("Cerrando conexion de control (procesado de mensajes) actual ante el cierre por la parte contraria.")
                 with global_lock:
                     incoming_end_read = incoming_end
                 continue
@@ -460,7 +467,7 @@ def control_incoming_loop(gui):
         with global_lock:
             incoming_end_read = incoming_end
 
-    print("Hilo de procesado de comandos saliendo...")
+    print("Hilo de procesado de mensajes saliendo...")
 
 def control_incoming_stop():
     '''

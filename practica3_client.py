@@ -106,7 +106,7 @@ class VideoClient(object):
         self.app.stopSubWindow()
 
         # Definicion de la ventana de elegir usuario para llamada:
-        self.app.startSubWindow("selectCallee",modal=True) #Modal: Bloquea a la principal.
+        self.app.startSubWindow("Iniciar llamada",modal=True) #Modal: Bloquea a la principal.
 
         self.app.addLabel("pad2", "",0,0) #Padding above
         self.app.setPadding([30,0])
@@ -333,6 +333,8 @@ class VideoClient(object):
         while not self.program_quit:
             frame_rec = np.array([])
 
+            connecting_to = get_connected_username()
+
             # Código que envia el frame a la red
             status = call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
@@ -369,14 +371,14 @@ class VideoClient(object):
                 frame_rec = cv2.imread("imgs/call_held.png")
                 frame_rec = cv2.resize(frame_rec, (640,480))
                 #EN ESPERA POR LA PARTE OPUESTA
-                self.app.setStatusbar("Llamada en espera por " + get_connected_username() ,field=0)
+                self.app.setStatusbar("Llamada en espera por " + connecting_to ,field=0)
                 self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=2)
 
-            elif get_connected_username() != None:
+            elif connecting_to != None:
                 frame_rec = cv2.imread("imgs/calling.jpg")
                 frame_rec = cv2.resize(frame_rec, (640,480))
                 #LLAMANDO
-                self.app.setStatusbar("Llamando a " + get_connected_username(),field=0)
+                self.app.setStatusbar("Llamando a " + connecting_to,field=0)
 
             else:
                 #NO EN LLAMADA
@@ -392,9 +394,8 @@ class VideoClient(object):
                     self.receive_loop.join()
                     print("Hilo de recepción de video recogido.")
 
-            if frame_rec.size != 0:
-                with self.rec_frame_lock:
-                    self.rec_frame = np.copy(frame_rec)
+            with self.rec_frame_lock:
+                self.rec_frame = np.copy(frame_rec)
 
             self.updateScreen()
             time.sleep(1/self.fps_recv)
@@ -501,12 +502,13 @@ class VideoClient(object):
             self.app.thread(self.populate_list)
 
             #Mostramos la ventana para llamar.
-            self.app.showSubWindow("selectCallee")
+            self.app.showSubWindow("Iniciar llamada")
 
         elif button == "Colgar":
             ret = end_call()
             if ret == -1:
                 self.app.warningBox("Advertencia.", "No está en llamada con ningún usuario.")
+                return
             if control_disconnect() != -1:
                 self.app.infoBox("Desconexion", "Ha sido desconectado del destinatario.")
 
@@ -537,7 +539,7 @@ class VideoClient(object):
         La llamada se iniciara asincronamente para no bloquear el GUI.
         '''
         nick = self.app.getEntry("calleeNickInput")
-        self.app.hideSubWindow("selectCallee")
+        self.app.hideSubWindow("Iniciar llamada")
         if nick == get_username():
             self.app.warningBox("Advertencia", "No puedes llamarte a ti mismo.")
             return
