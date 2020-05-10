@@ -13,17 +13,29 @@ import numpy as np
 import threading
 import heapq
 
+#Variables globales de estado del modulo
 buffer_lock = threading.Lock() #Cerrojo para el buffer en los 2 hilos (recepcion de la red y extraccion para reproducir)
 buffer_num = 0 #Ultimo paquete que se extrajo del buffer. Esto evita que llegue uno posterior a uno ya emitido.
 timemax = -1 #Retardo fijo. No se reproduciran paquetes pasado este retardo fijo desde su emision.
+packets_lost = [0,0,0] #3 contadores de paquetes uno para cada ajuste (calidad,FPS,resolucion) posible.
+time_last_check_qual = -1 #Timestamp con la ultima vez que se intento actualizar la calidad
+time_last_check_fps = -1 #Timestamp con la ultima vez que se intentaron actualizar los FPS
+time_last_check_res = -1 #Timestamp con la ultima vez que se intento actualizar la resolucion
+
+#Parametros constantes del QoS
 BUFFER_SIZE = 256 #Tamano maximo para el buffer.
 BUFFER_THRESHOLD = 10 #Numero de frames que han tenido que llegar para que se reproduzcan frames
 FIXED_DELAY_THRESHOLD = 0.25 #Milisegundos de margen que se permiten como mucho para el retardo fijo.
 FPS_REFRESH = 5.0 #Cada cuanto se intenta reajustar los fps
 QUALITY_REFRESH = 1.0 #Cada cuanto se intenta reajustar la calidad de compresion
 RESOLUTION_REFRESH = 10.0 #Cada cuanto se intenta reajustar la resolucion del video
-MEDIUM_LOST = 1/15 #Fraccion de frames perdida por segundo que se considera mediocre
+
+#MEDIDAS PARA AJUSTAR QoS. Cada valor es una fraccion de frames. 
+# Por ejemplo, si desde la ultima comprobacion debieron llegar 
+# 10 paquetes, y llegan 6, entonces ha habido una fraccion de 0.4 de perdidas.
+MEDIUM_LOST = 1/15 #Fraccion de frames perdida por segundo que se considera mediocre.
 WORST_LOST = 4/15 #Fraccion de frames perdida por segundo que se considera mala
+
 def send_frame(socket_video,status,frame,numOrden, quality ,resolution,fps):
     '''
     Nombre: send_frame
@@ -67,20 +79,24 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
     Retorno:
         None
     '''
-    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps, timemax, time_last_check_res
+    global buffer_num, packets_lost, time_last_check_qual, time_last_check_fps, timemax, time_last_check_res
 
-    #Inicializar las variables de control
+    #Inicializar las variables de control del modulo de video.
     buffer_num = -1
-    last_packet = -1
     timemax = -1
     packets_lost = [0,0,0]
     time_last_check_qual = time.time()
     time_last_check_fps = time.time()
     time_last_check_res = time.time()
 
-    #Vaciar el socket
+    #Vaciar el socket. Podrian quedar restos de llamadas previas, 
+    #cuyos numeros de secuencia lian al contador de paquetes perdidos.
     socket_video_rec.setblocking(0)
-    while socket_video_rec.recvfrom(65535):
+    try:
+        while socket_video_rec.recvfrom(65535):
+            pass
+    except:
+        #No queda nada que vaciar
         pass
     socket_video_rec.setblocking(1)
 
@@ -136,13 +152,18 @@ def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
         - Si el buffer esta bloqueado se devuelven 3 elementos: -1, una lista vacia
         y un numpy array vacio.
     '''
-    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps, time_last_check_res
+    global buffer_num, packets_lost, time_last_check_qual, time_last_check_fps, time_last_check_res
+    #El buffer debe estar desbloqueado, es decir, deben haber llegado suficientes elementos para poder ir extrayendo.
     if(not block[0]):
         with buffer_lock:
 
+            #Almacenamos el instante actual
             time_epoch = time.time()
 
             #Guardamos los fps a los que se envio el frame que vamos a leer
+            #buffer[0] -> paquete actual
+            #campo 1 -> Header
+            #campo 3 del header -> FPS
             fps_entrante = int(buffer[0][1][3])
 
             #Si el paquete que toca sacar esta muy retrasado, lo descartamos y sacamos otro
@@ -155,16 +176,18 @@ def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
 
             #Añadimos el numero de paquetes perdidos
             if(buffer_num != -1 ):
+                #Paquetes perdidos desde el ultimo que se saco (buffer_num)
                 packets_lost_now = buffer[0][0] - buffer_num -1
                 if(packets_lost_now < 0):
                     packets_lost_now = 0
+                #Se agregan a los 3 contadores (uno para cada parametro de calidad)
                 packets_lost[0] += packets_lost_now
                 packets_lost[1] += packets_lost_now
                 packets_lost[2] += packets_lost_now
-
+                #Se agregan al conteo total
                 packets_lost_total[0] += packets_lost_now
 
-            #Ajustamos la calidad de compresión cada segundo
+            #Ajustamos la calidad de compresión cada QUALITY_REFRESH
             if(time_epoch - time_last_check_qual > QUALITY_REFRESH):
                 if(packets_lost[0] < MEDIUM_LOST * QUALITY_REFRESH * fps_entrante):
                     quality[0] = 75
@@ -175,7 +198,7 @@ def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
                 packets_lost[0] = 0
                 time_last_check_qual = time_epoch
 
-            #Ajustamos los fps cada cinco segundos
+            #Ajustamos los fps cada FPS_REFRESH
             if(time_epoch - time_last_check_fps > FPS_REFRESH):
                 if(packets_lost[1] < MEDIUM_LOST * FPS_REFRESH * fps_entrante):
                     fps[0] = 40
@@ -184,10 +207,9 @@ def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
                 else:
                     fps[0] = 20
                 packets_lost[1] = 0
-
                 time_last_check_fps = time_epoch
 
-            #Ajustamos la resolucion cada diez segundos
+            #Ajustamos la resolucion cada RESOLUTION_REFRESH
             if(time_epoch - time_last_check_res > RESOLUTION_REFRESH):
                 if(packets_lost[2] < MEDIUM_LOST * RESOLUTION_REFRESH * fps_entrante):
                     resolution[0] = "640x480"

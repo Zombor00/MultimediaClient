@@ -220,7 +220,7 @@ class VideoClient(object):
         Descripcion: Registra al usuario en la aplicacion y arranca todos los hilos necesarios para gestionar
         la sesion.
         '''
-        # Entrada del nick del usuario a conectar
+        # Entrada de los datos del usuario a conectar
         print("Comenzando registro de usuario.")
         register_nick = self.app.getEntry("userInput")
         password = self.app.getEntry("passInput")
@@ -228,8 +228,9 @@ class VideoClient(object):
         video_port = int(self.app.getEntry("udpInput"))
         ip = self.app.getEntry("ipInput")
 
-        invalid_port = False
 
+        #Comprobamos si los puertos introducidos son correctos
+        invalid_port = False
         if control_port:
             if control_port>65535 or control_port < 1024:
                 invalid_port = True
@@ -238,19 +239,21 @@ class VideoClient(object):
             if video_port>65535 or video_port < 1024:
                 invalid_port = True
             video_port = str(video_port)
-
-        #Comprobamos rango
         if invalid_port:
             self.app.errorBox("Error", "El puerto introducido es invalido. Debe estar en el rango 1024-65535",parent="Login")
             return
 
+        #Si no se introdujo IP
         if ip == None or ip == "":
             #Ponemos la IP local
             ip = socket.gethostbyname(socket.gethostname())
 
+        #Faltan datos
         if not register_nick or not password or not control_port or not video_port or not ip:
             self.app.errorBox("Error", "No se ha podido realizar el registro correctamente. Faltan datos.",parent="Login")
             return
+
+        #Realizamos el registro en el discovery
         print("Tratando de registrar a " + register_nick + " con clave " + password + " puerto:" + control_port + " ip:" + ip + " puerto de video: " + video_port)
         ret = register_user(register_nick,password, ip, control_port)
         if not ret:
@@ -258,11 +261,12 @@ class VideoClient(object):
             self.app.errorBox("Error", "No se ha podido realizar el registro correctamente. Error del servidor de descubrimiento.",parent="Login")
             return
 
-        #Clave incorrecta
+        #Clave incorrecta, la volvemos a pedir.
         if ret == -1:
             self.app.warningBox("Contraseña incorrecta.", "La contraseña es incorrecta. Por favor, introduzcala de nuevo.",parent="Login")
             return
 
+        #Ajustamos la informacion indicando quien ha iniciado la sesion
         self.app.setLabel("loggeduser", "Sesion iniciada como: " + register_nick)
         self.listen_control_port = control_port
 
@@ -275,16 +279,21 @@ class VideoClient(object):
         self.socket_video_rec = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket_video_rec.bind(('',int(video_port)))
 
-        #Hilos de recepcion
+        #Hilos de recepcion y envio:
+        #CONEXION: Atiende conexiones nuevas que entren gestionando los intentos de llamada (ACCEPT/DENY/BUSY)
         self.connection_loop = threading.Thread(target=control_listen_loop, args = (self.listen_control_port,self.app))
+        #COMANDOS: Responde a los comandos que entren a traves de una llamada entrante. Esta bloqueado mientras no hay llamadas.
         self.command_loop = threading.Thread(target=control_incoming_loop, args = (self.app,))
         self.connection_loop.start()
         self.command_loop.start()
+        #ENVIO: Muestra por pantalla (y si es necesario envia por la red) los frames al ritmo adecuado
         self.frame_send_loop = threading.Thread(target=self.enviaVideo)
+        #RECEPCION: Hilo que a ritmo de FPS-recv actualiza el frame entrante.
         self.frame_recv_loop = threading.Thread(target=self.capturaVideo)
         self.frame_send_loop.start()
         self.frame_recv_loop.start()
 
+        #Almacenamos datos relevantes del usuario en formato JSON
         user_data = {"username":register_nick, "tcp_port":control_port, "udp_port":video_port}
         with open(user_filename, "w+") as file:
             json.dump(user_data,file, indent=4)
@@ -304,29 +313,32 @@ class VideoClient(object):
             #Tiempo actual para mayor precision en los FPS
             send_start_time = time.time()
 
-            #Reajustamos la resolucion
+            #Reajustamos la resolucion en caso de que sea necesario
             if(self.resolution_send[0] != self.resolution_send_old[0]):
                 self.setImageResolution(self.resolution_send[0])
                 self.resolution_send_old[0] = self.resolution_send[0]
 
             # Capturamos un frame de la cámara o del vídeo
             ret, frame = self.cap.read()
-            #Bucle si el video acaba
+            #Bucle si el video acaba o si la camara se desconecta como consecuencia de un cambio de conexion
             if not ret:
+                #Se reestablece la conexion con el video o camara
                 if self.currently_playing_file:
                     self.cap = cv2.VideoCapture(self.currently_playing_file)
-                    ret,frame = self.cap.read()
-                    #Error
-                    if not ret:
-                        self.app.errorBox("Error fatal", "El video/camara que se estaba reproduciendo no se encuentra. Puede deberse a que este en uso por otra aplicacion.")
-                        self.app.stop()
-                        return
                 else:
                     self.cap = cv2.VideoCapture(0)
-                    continue
+                #Se vuelve a intentar
+                ret, frame = self.cap.read()
+                #Error
+                if not ret:
+                    self.app.errorBox("Error fatal", "El video/camara que se estaba reproduciendo no se encuentra. Puede deberse a que este en uso por otra aplicacion.")
+                    self.app.stop()
+                    return
 
+            #Reescalado para mostrar en la GUI
             frame = cv2.resize(frame, (640,480))
-            # Código que envia el frame a la red
+
+            # Código que envia el frame a la red en caso de que se este en llamada
             status = call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
                 #Enviamos el frame
@@ -334,12 +346,18 @@ class VideoClient(object):
                 if(errorSend == -1):
                     print("Error sending message")
                 self.num += 1
+
+            #Almacenamos finalmente el frame
             with self.cap_frame_lock:
                 self.cap_frame = np.copy(frame)
+
+            #Actualizacion de informacion
             string_field1 = "Video propio: " + str(self.fps_send[0]) + " FPS"
             string_field1 += " Compresion: " + str(self.quality_send[0]) + "%"
             string_field1 += " Resolucion: " + self.resolution_send[0]
             self.app.setStatusbar( string_field1 ,field=1)
+
+            #Repintar la pantalla
             self.updateScreen()
 
             #Pausa el tiempo que quede para mandar a ritmo FPS_send
@@ -359,29 +377,35 @@ class VideoClient(object):
         dicho buffer al ritmo deseado.
         '''
         while not self.program_quit:
+
+            #Frame que nos llega
             frame_rec = np.array([])
 
             #Tiempo actual para mayor precision en los FPS
             receive_start_time = time.time()
 
+            #Con quien estamos conectados
             connecting_to = get_connected_username()
 
             # Código que envia el frame a la red
             status = call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
 
+                #Si es el primer tick en el que se ha entrado aqui, preparar lo necesario
                 if(self.boolResetFrame == 1):
                     self.boolResetFrame = 0
                     self.startTime = time.time()
+                    #Hilo de RECOGIDA: Recoge paquetes de video entrantes continuamente, de manera asincrona.
                     self.receive_loop = threading.Thread(target=receive_frame, args = (self.socket_video_rec, self.buffer_video, self.buffer_block))
                     self.receive_loop.start()
                     print("Hilo de recepción de video iniciado.")
 
-                #EN LLAMADA.
+                #Actualizar informacion
                 self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
 
                 #Popeamos el elemento a mostrar
-                num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total)
+                _, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total)
+
                 #Actualizamos la GUI
                 if(len(header) >= 4):
                     string = "Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)))
@@ -391,50 +415,63 @@ class VideoClient(object):
                     self.app.setStatusbar(string ,field=2)
                     self.fps_recv = int(header[3])
                 else:
+                    #Aun no hay frames suficientes en el buffer: icono de carga
                     self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) ,field=2)
                     frame_rec = cv2.imread("imgs/loading_video.png")
 
             elif status[0] == "HOLD1":
-                frame_rec = cv2.imread("imgs/call_held.png")
                 #EN ESPERA POR NUESTRA PARTE
+                frame_rec = cv2.imread("imgs/call_held.png")
                 self.app.setStatusbar("Llamada en espera por " + get_username() ,field=0)
                 self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime) ) ,field=2)
 
             elif status[0] == "HOLD2":
-                frame_rec = cv2.imread("imgs/call_held.png")
                 #EN ESPERA POR LA PARTE OPUESTA
+                frame_rec = cv2.imread("imgs/call_held.png")
                 self.app.setStatusbar("Llamada en espera por " + connecting_to ,field=0)
                 self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=2)
 
             elif connecting_to != None:
-                frame_rec = cv2.imread("imgs/calling.jpg")
                 #LLAMANDO
+                frame_rec = cv2.imread("imgs/calling.jpg")
                 self.app.setStatusbar("Llamando a " + connecting_to,field=0)
 
             else:
                 #NO EN LLAMADA
                 self.app.setStatusbar("Cliente listo para llamar.",field=0)
                 self.app.setStatusbar("" ,field=2)
+
+                #Si es el primer tick que se entra aqui tras una llamada, finalizamos todos los recursos asociados a la misma.
                 if(self.boolResetFrame != 1):
+
+                    #Parar hilo de RECOGIDA
                     self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(get_video_port())))
                     self.receive_loop.join()
+
+                    #Bloquear de nuevo el buffer
                     self.buffer_block = [True]
+
+                    #Reinicio de parametros
                     self.boolResetFrame = 1
                     self.fps_recv = 30
                     self.num = 0
                     self.quality_send[0] = 50
                     self.packets_lost_total[0] = 0
                     self.rec_frame = np.array([])
+                    
+                    #Vaciado del buffer
                     self.buffer_video = list()
                     print("Hilo de recepción de video recogido.")
 
-            #Lo ponemos al tamano del marco de la GUI
+            #Una vez obtenido el frame entrante, lo reescalamos para que entre en la gui.
             if frame_rec.size != 0:
                 frame_rec = cv2.resize(frame_rec, (640,480))
 
+            #Lo almacenamos
             with self.rec_frame_lock:
                 self.rec_frame = np.copy(frame_rec)
 
+            #Actualizamos la pantalla
             self.updateScreen()
 
             #Pausa el tiempo que quede para mandar a ritmo FPS_recv
@@ -442,7 +479,7 @@ class VideoClient(object):
             if(remaining > 0):
                 time.sleep(remaining)
 
-        #Fin del hilo:
+        #Fin del hilo: liberar recursos, si los hubiese.
 
         if(self.boolResetFrame != 1):
             self.buffer_block = [True]
@@ -455,7 +492,6 @@ class VideoClient(object):
             print("Hilo de recepción de video recogido.")
         print("Hilo de procesado de video entrante recogido.")
 
-    #Actualiza la pantalla con los frames que haya
     def updateScreen(self):
         '''
         Nombre: updateScreen
@@ -518,8 +554,6 @@ class VideoClient(object):
                     return
                 self.currently_playing_file = None
 
-
-    # Función que gestiona los callbacks de los botones
     def buttonsCallback(self, button):
         '''
         Nombre: buttonsCallback
@@ -568,7 +602,6 @@ class VideoClient(object):
             else:
                 self.app.warningBox("Advertencia.", "No se ha podido desactivar el modo espera porque no esta en llamada.")
 
-    #Llama a alguien
     def init_call(self):
         '''
         Nombre: init_call
@@ -592,6 +625,7 @@ class VideoClient(object):
         Descripcion: Se ejecuta cuando la llamada que se estaba intentando iniciar asincronamente devuelve un resultado.
         Arugmentos: ret - resultado del establecimiento de la llamada.
         '''
+        #Todas las ventanas de informacion se muestran en segundo plano para no bloquear la GUI.
         if ret == -2:
             self.app.thread(self.app.infoBox,"Usuario ocupado", "El usuario al que llama está ocupado.")
         elif ret == -3:
@@ -606,6 +640,7 @@ class VideoClient(object):
         Nombre: list_handler
         Descripcion: Se ejecuta cuando el usuario seleccione un nick de la lista.
         '''
+        #Cuando se pincha en la lista se usa ese nombre para llamar.
         inputs = self.app.getListBox("nicksList")
         if len(inputs) > 0:
             nick = inputs[0]
@@ -616,20 +651,20 @@ class VideoClient(object):
         Nombre: populate_list
         Descripcion: Funcion pensada para rellenar la lista de usuarios de forma asincrona.
         '''
+        #Poblamos la lista de usuarios con los nombres
         users = list_users()
         if users == None:
             print("Error obteniendo listado de usuarios.")
             return
 
-        self.app.updateListBox("nicksList", [e[0] for e in users], select=False)
+        self.app.updateListBox("nicksList", [e[0] for e in users if len(e) > 0], select=False)
 
 #PROGRAMA PRINCIPAL
 
 if __name__ == '__main__':
 
+    #Crear objeto GUI
     vc = VideoClient("1280x720")
-
-    # Se inicializa en on_startup() para poder mostrar ventanas de info
 
     # Lanza el bucle principal del GUI
     # El control ya NO vuelve de esta función, por lo que todas las
