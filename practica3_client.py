@@ -42,6 +42,7 @@ class VideoClient(object):
     fps_recv = 20 #FPS para el video entrante
     quality_send = [50] #Calidad de compresión del video saliente
     resolution_send = ["640x480"] # Resolucion a la que se envía el video
+    resolution_send_old = ["640x480"]
     packets_lost_total = [0] #Numero de paquetes perdidos
     cap_frame = np.array([]) #Frame nuestro que se captura a ritmo de fps_send
     rec_frame = np.array([]) #Ultimo frame recibido, se actualiza a ritmo de fps_recv
@@ -303,6 +304,12 @@ class VideoClient(object):
             #Tiempo actual para mayor precision en los FPS
             send_start_time = time.time()
 
+            #Reajustamos la resolucion
+            if(self.resolution_send[0] != self.resolution_send_old[0]):
+                self.setImageResolution(self.resolution_send[0])
+                self.resolution_send_old[0] = self.resolution_send[0]
+
+
             # Capturamos un frame de la cámara o del vídeo
             ret, frame = self.cap.read()
             #Bucle si el video acaba
@@ -372,7 +379,6 @@ class VideoClient(object):
 
                 #Popeamos el elemento a mostrar
                 num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total)
-                self.setImageResolution(self.resolution_send[0])
                 #Actualizamos la GUI
                 if(len(header) >= 4):
                     string = "Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)))
@@ -458,7 +464,7 @@ class VideoClient(object):
             frame = np.copy(self.cap_frame)
 
         #Mostrar frame capturado
-        if frame_rec.size != 0:
+        if frame_rec.size != 0 and frame.size != 0:
             #Frame pequeno
             frame_mini = cv2.resize(frame, (160,120))
             frame_compuesto = frame_rec
