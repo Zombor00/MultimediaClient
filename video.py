@@ -13,8 +13,12 @@ import numpy as np
 import threading
 import heapq
 
-buffer_lock = threading.Lock()
-buffer_num = 0
+buffer_lock = threading.Lock() #Cerrojo para el buffer en los 2 hilos (recepcion de la red y extraccion para reproducir)
+buffer_num = 0 #Ultimo paquete que se extrajo del buffer. Esto evita que llegue uno posterior a uno ya emitido.
+timemax = -1 #Retardo fijo. No se reproduciran paquetes pasado este retardo fijo desde su emision.
+BUFFER_SIZE = 256 #Tamano maximo para el buffer.
+BUFFER_THRESHOLD = 10 #Numero de frames que han tenido que llegar para que se reproduzcan frames
+FIXED_DELAY_THRESHOLD = 0.25 #Milisegundos de margen que se permiten como mucho para el retardo fijo.
 
 def send_frame(socket_video,status,frame,numOrden, quality ,resolution,fps):
     '''
@@ -59,13 +63,15 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
     Retorno:
         None
     '''
-    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps
-    timemax = -1
+    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps, timemax
+
+    #Inicializar las variables de control
     buffer_num = -1
     last_packet = -1
     packets_lost = 0
     time_last_check_qual = time.time()
     time_last_check_fps = time.time()
+    
     while True:
         data, _ = socket_video_rec.recvfrom(65535)
 
@@ -75,19 +81,27 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
         with buffer_lock:
             video_length = len(buffer_video)
 
-        if(data != None and video_length < 1024):
+        if(data != None and video_length < BUFFER_SIZE):
             header,decimg = decompress(data)
             timestamp = float(header[1])
+            incoming_fps = int(header[3])
 
+            #Calculo del retardo fijo maximo
             if(timemax == -1):
-                timemax = time.time() - timestamp + 0.04
+                #Retardo de red
+                network_delay_estimate = time.time() - timestamp
+                #Retardo que tendra lugar a causa de la espera inicial del buffer
+                buffer_threshold_delay_estimate = BUFFER_THRESHOLD/incoming_fps
+                #Tiempo maximo de retardo que permitiremos
+                timemax = network_delay_estimate + buffer_threshold_delay_estimate + FIXED_DELAY_THRESHOLD
 
             #Eliminamos los elementos anteriores al ultimo extraido
             with buffer_lock:
-                if((buffer_num < int(header[0])) and (time.time() - timestamp) < timemax):
+                if((buffer_num < int(header[0]))):
                     heapq.heappush(buffer_video,(int(header[0]),header,decimg))
-                #TODO Evitar que se haga esta comparación todo el rato
-                if(len(buffer_video) > 10):
+
+                #Levantamos el buffer cuando haya un poco de cantidad
+                if(len(buffer_video) > BUFFER_THRESHOLD):
                     buffer_block[0] = False
 
 def pop_frame(buffer, block, quality, fps, packets_lost_total):
@@ -100,7 +114,7 @@ def pop_frame(buffer, block, quality, fps, packets_lost_total):
     Argumentos: buffer: Heap del que se extrae la tripla.
                 block: Indica si está bloqueada la extraccion de frames.
 
-                Datos que actualiza la funcion:
+                Datos que actualiza la funcion (deben pasarse por referencia, envueltos en una lista):
                 quality: Calidad con la que se están comprimiendo los frames
                 fps: Frames que se envian al segundos
                 packets_lost_total: Numero total de paquetes perdidos esta llamada
@@ -112,47 +126,57 @@ def pop_frame(buffer, block, quality, fps, packets_lost_total):
     '''
     global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps
     if(not block[0]):
-        if(len(buffer) == 1):
-            with buffer_lock:
+        with buffer_lock:
+
+            time_epoch = time.time()
+
+            #Si el paquete que toca sacar esta muy retrasado, lo descartamos y sacamos otro
+            #buffer[0] -> paquete que toca sacar
+            #campo 1 -> Header
+            #campo 1 del header -> timestamp
+            #Si solo queda un paquete no lo hacemos dado que no hay mas remedio que usar ese
+            while len(buffer) > 1 and (time_epoch - float(buffer[0][1][1]) > timemax):
+                heapq.heappop(buffer) #Extraccion del paquete descartado
+
+            #Añadimos el numero de paquetes perdidos
+            if(buffer_num != -1 ):
+                packets_lost_now = buffer[0][0] - buffer_num -1
+                if(packets_lost_now < 0):
+                    packets_lost_now = 0
+                packets_lost += packets_lost_now
+                packets_lost_total[0] += packets_lost_now
+
+            #Ajustamos la calidad de compresión cada segundo
+            if(time_epoch - time_last_check_qual > 1.0):
+                if(packets_lost < 2):
+                    quality[0] = 75
+                elif(packets_lost < 8):
+                    quality[0] = 50
+                else:
+                    quality[0] = 25
+
+                time_last_check_qual = time_epoch
+
+            #Ajustamos los fps cada cinco segundos
+            if(time_epoch - time_last_check_fps > 5.0):
+                if(packets_lost < 2):
+                    fps[0] = 40
+                elif(packets_lost < 8):
+                    fps[0] = 30
+                else:
+                    fps[0] = 20
+                packets_lost = 0
+
+                time_last_check_fps = time_epoch
+
+            #Actualizamos el buffer num al numero del header del primer elemento
+            buffer_num = buffer[0][0]
+
+            #Evitamos vaciado completo en caso de que no se este recibiendo a suficiente ritmo
+            if len(buffer) == 1:
                 return buffer[0]
-        else:
-            with buffer_lock:
-                #Añadimos el numero de paquetes perdidos
-                if(buffer_num != -1 ):
-                    packets_lost_now = buffer[0][0] - buffer_num -1
-                    if(packets_lost_now < 0):
-                        packets_lost_now = 0
-                    packets_lost += packets_lost_now
-                    packets_lost_total[0] += packets_lost_now
 
-                time_epoch = time.time()
-
-                #Ajustamos la calidad de compresión cada segundo
-                if(time_epoch - time_last_check_qual > 1.0):
-                    if(packets_lost < 2):
-                        quality[0] = 75
-                    elif(packets_lost < 8):
-                        quality[0] = 50
-                    else:
-                        quality[0] = 25
-
-                    time_last_check_qual = time_epoch
-
-                #Ajustamos los fps cada cinco segundos
-                if(time_epoch - time_last_check_fps > 5.0):
-                    if(packets_lost < 2):
-                        fps[0] = 40
-                    elif(packets_lost < 8):
-                        fps[0] = 30
-                    else:
-                        fps[0] = 20
-                    packets_lost = 0
-
-                    time_last_check_fps = time_epoch
-
-                #Actualizamos el buffer num al numero del header del primer elemento
-                buffer_num = buffer[0][0]
-                return heapq.heappop(buffer)
+            return heapq.heappop(buffer)
 
     else:
         return -1, list(), np.array([])

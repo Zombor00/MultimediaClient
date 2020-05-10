@@ -30,7 +30,7 @@ class VideoClient(object):
     frame_send_loop = None #Hilo que envia los frames al ritmo correcto
     frame_recv_loop = None #Hilo que recibe los frames al ritmo correcto
     nick = None #Nombre de usuario
-    listen_control_port = "10000" #Puerto de escucha para control
+    listen_control_port = "10000" #Puerto de escucha para control. Lo ajusta el usuario con la interfaz.
     boolResetFrame = 1 #Indica si han de resetearse los campos propios de la llamada la siguiente vez que se actualice frame.
     socket_video_send = None #Socket UDP para enviar video
     socket_video_rec = None #Socket UDP para recibir video
@@ -74,7 +74,10 @@ class VideoClient(object):
 
         # Barra de estado
         # Debe actualizarse con información útil sobre la llamada (duración, FPS, etc...)
-        self.app.addStatusbar(fields=3)
+        self.app.addStatusbar(fields=3,side="LEFT")
+        self.app.setStatusbarWidth(35,field=0)
+        self.app.setStatusbarWidth(50,field=1)
+        self.app.setStatusbarWidth(60,field=2)
         #Bara de herramientas
         self.app.addToolbar(["FILE","CAMERA"], self.toolbarCallback, findIcon=True)
         self.app.setToolbarIcon("CAMERA","md-camera-photo")
@@ -296,6 +299,10 @@ class VideoClient(object):
         1/FPS_ENVIO segundos. Tambien se ocupa de mostrar en la pantalla nuestra imagen.
         '''
         while not self.program_quit:
+
+            #Tiempo actual para mayor precision en los FPS
+            send_start_time = time.time()
+
             # Capturamos un frame de la cámara o del vídeo
             ret, frame = self.cap.read()
             #Bucle si el video acaba
@@ -319,12 +326,16 @@ class VideoClient(object):
             with self.cap_frame_lock:
                 self.cap_frame = np.copy(frame)
             string_field1 = "Video propio: " + str(self.fps_send[0]) + " FPS"
-            string_field1 += " Quality compression: " + str(self.quality_send[0])
-            string_field1 += " Resolution: " + self.resolution_send[0]
+            string_field1 += " Compresion: " + str(self.quality_send[0]) + "%"
+            string_field1 += " Resolucion: " + self.resolution_send[0]
             self.app.setStatusbar( string_field1 ,field=1)
             self.updateScreen()
-            time.sleep(1/self.fps_send[0])
-        #self.app.after(int(1/self.fps_send*1000), self.enviaVideo)
+
+            #Pausa el tiempo que quede para mandar a ritmo FPS_send
+            remaining = 1/self.fps_send[0] - (time.time() - send_start_time)
+            if(remaining > 0):
+                time.sleep(remaining)
+
         print("Hilo de procesado de video saliente recogido.")
 
     # Función que captura el frame a mostrar en cada momento
@@ -338,6 +349,9 @@ class VideoClient(object):
         '''
         while not self.program_quit:
             frame_rec = np.array([])
+
+            #Tiempo actual para mayor precision en los FPS
+            receive_start_time = time.time()
 
             connecting_to = get_connected_username()
 
@@ -363,30 +377,28 @@ class VideoClient(object):
                 if(len(header) >= 4):
                     string = "Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)))
                     string += " FPS: " + str(header[3])
-                    string += " Resolution: " + str(header[2])
-                    string += " Frames perdidos: " + str(self.packets_lost_total[0])
+                    string += " Resolucion: " + str(header[2])
+                    string += " Perdidos: " + str(self.packets_lost_total[0])
                     self.app.setStatusbar(string ,field=2)
                     self.fps_recv = int(header[3])
                 else:
                     self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) ,field=2)
+                    frame_rec = cv2.imread("imgs/loading_video.png")
 
             elif status[0] == "HOLD1":
                 frame_rec = cv2.imread("imgs/call_held.png")
-                frame_rec = cv2.resize(frame_rec, (640,480))
                 #EN ESPERA POR NUESTRA PARTE
                 self.app.setStatusbar("Llamada en espera por " + get_username() ,field=0)
                 self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime) ) ,field=2)
 
             elif status[0] == "HOLD2":
                 frame_rec = cv2.imread("imgs/call_held.png")
-                frame_rec = cv2.resize(frame_rec, (640,480))
                 #EN ESPERA POR LA PARTE OPUESTA
                 self.app.setStatusbar("Llamada en espera por " + connecting_to ,field=0)
                 self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)) ,field=2)
 
             elif connecting_to != None:
                 frame_rec = cv2.imread("imgs/calling.jpg")
-                frame_rec = cv2.resize(frame_rec, (640,480))
                 #LLAMANDO
                 self.app.setStatusbar("Llamando a " + connecting_to,field=0)
 
@@ -406,12 +418,19 @@ class VideoClient(object):
                     self.receive_loop.join()
                     print("Hilo de recepción de video recogido.")
 
+            #Lo ponemos al tamano del marco de la GUI
+            if frame_rec.size != 0:
+                frame_rec = cv2.resize(frame_rec, (640,480))
+
             with self.rec_frame_lock:
                 self.rec_frame = np.copy(frame_rec)
 
             self.updateScreen()
-            time.sleep(1/self.fps_recv)
-        #self.app.after(int(1/self.fps_recv*1000), self.capturaVideo)
+            
+            #Pausa el tiempo que quede para mandar a ritmo FPS_recv
+            remaining = 1/self.fps_recv - (time.time() - receive_start_time)
+            if(remaining > 0):
+                time.sleep(remaining)
 
         #Fin del hilo:
 
