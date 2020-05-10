@@ -38,8 +38,11 @@ class VideoClient(object):
     buffer_video = None #Buffer con los frames de video
     buffer_block = [True] #Indicara al buffer si puede sacar frames o no. Solo lo levantaremos cuando este parcialmente lleno.
     currently_playing_file = None #Nombre del fichero que se esta enviando actualmente.
-    fps_send = 30 #FPS para el video saliente
+    fps_send = [30] #FPS para el video saliente
     fps_recv = 20 #FPS para el video entrante
+    quality_send = [50] #Calidad de compresión del video saliente
+    resolution_send = ["640x480"] # Resolucion a la que se envía el video
+    packets_lost_total = [0] #Numero de paquetes perdidos
     cap_frame = np.array([]) #Frame nuestro que se captura a ritmo de fps_send
     rec_frame = np.array([]) #Ultimo frame recibido, se actualiza a ritmo de fps_recv
     cap_frame_lock = threading.Lock() #Lock para captura de video
@@ -168,7 +171,7 @@ class VideoClient(object):
         #esta funcion. Esto se podria arreglar usando la cola de eventos
         #de appJar, pero no esta pensada ni de lejos para video. Su ratio
         #de refresco es 10 veces por segundo, y hemos logrado incrementarlo
-        #mirando el codigo de appJar (hay una variable privada que podemos modificar) 
+        #mirando el codigo de appJar (hay una variable privada que podemos modificar)
         #pero aun asi no es suficiente.
         if not self.program_quit:
             self.app.thread(self.async_cleaning)
@@ -309,15 +312,18 @@ class VideoClient(object):
             status = call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
                 #Enviamos el frame
-                errorSend = send_frame(self.socket_video_send, (status[0],int(status[1])), frame, self.num, 50, "640x480", self.fps_send)
+                errorSend = send_frame(self.socket_video_send, (status[0],int(status[1])), frame, self.num, self.quality_send[0],self.resolution_send[0], self.fps_send[0])
                 if(errorSend == -1):
                     print("Error sending message")
                 self.num += 1
             with self.cap_frame_lock:
                 self.cap_frame = np.copy(frame)
-            self.app.setStatusbar("Video propio a " + str(self.fps_send) + " FPS." ,field=1)
+            string_field1 = "Video propio: " + str(self.fps_send[0]) + " FPS"
+            string_field1 += " Quality compression: " + str(self.quality_send[0])
+            string_field1 += " Resolution: " + self.resolution_send[0]
+            self.app.setStatusbar( string_field1 ,field=1)
             self.updateScreen()
-            time.sleep(1/self.fps_send)
+            time.sleep(1/self.fps_send[0])
         #self.app.after(int(1/self.fps_send*1000), self.enviaVideo)
         print("Hilo de procesado de video saliente recogido.")
 
@@ -351,11 +357,15 @@ class VideoClient(object):
                 self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
 
                 #Popeamos el elemento a mostrar
-                num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block)
+                num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.packets_lost_total)
 
                 #Actualizamos la GUI
                 if(len(header) >= 4):
-                    self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) + " FPS: " + str(header[3]) + " Resolution: " + str(header[2]) ,field=2)
+                    string = "Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)))
+                    string += " FPS: " + str(header[3])
+                    string += " Resolution: " + str(header[2])
+                    string += " Frames perdidos: " + str(self.packets_lost_total[0])
+                    self.app.setStatusbar(string ,field=2)
                     self.fps_recv = int(header[3])
                 else:
                     self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) ,field=2)
@@ -388,6 +398,8 @@ class VideoClient(object):
                     self.buffer_block = [True]
                     self.boolResetFrame = 1
                     self.fps_recv = 30
+                    self.quality_send[0] = 50
+                    self.packets_lost_total[0] = 0
                     self.rec_frame = np.array([])
                     self.buffer_video = list()
                     self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(get_video_port())))
@@ -583,7 +595,7 @@ class VideoClient(object):
         if users == None:
             print("Error obteniendo listado de usuarios.")
             return
-            
+
         self.app.updateListBox("nicksList", [e[0] for e in users], select=False)
 
 #PROGRAMA PRINCIPAL

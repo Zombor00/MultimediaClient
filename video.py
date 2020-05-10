@@ -16,7 +16,7 @@ import heapq
 buffer_lock = threading.Lock()
 buffer_num = 0
 
-def send_frame(socket_video,status,frame,numOrden,quality,resolution,fps):
+def send_frame(socket_video,status,frame,numOrden, quality ,resolution,fps):
     '''
     Nombre: send_frame
     Descripcion: Envia un frame comprimido a la ip/puerto indicados.
@@ -59,9 +59,13 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
     Retorno:
         None
     '''
-    global buffer_num
+    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps
     timemax = -1
-    buffer_num = -65535
+    buffer_num = -1
+    last_packet = -1
+    packets_lost = 0
+    time_last_check_qual = time.time()
+    time_last_check_fps = time.time()
     while True:
         data, _ = socket_video_rec.recvfrom(65535)
 
@@ -86,27 +90,66 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
                 if(len(buffer_video) > 10):
                     buffer_block[0] = False
 
-def pop_frame(buffer,block):
+def pop_frame(buffer, block, quality, fps, packets_lost_total):
     '''
     Nombre: pop_frame
     Descripcion: Extrae un elemento del buffer. Cada elemento es una tripla que
-                 contiene el numero de frame, el header y el frame.
+                 contiene el numero de frame, el header y el frame. Ajusta
+                 la calidad del video dependiendo de los frames perdidos.
                 heap.
     Argumentos: buffer: Heap del que se extrae la tripla.
                 block: Indica si está bloqueada la extraccion de frames.
+
+                Datos que actualiza la funcion:
+                quality: Calidad con la que se están comprimiendo los frames
+                fps: Frames que se envian al segundos
+                packets_lost_total: Numero total de paquetes perdidos esta llamada
     Retorno:
         - Si hay elementos: se devuelven 3 elementos. El primero es el numero
         de frame, el segundo elemento es el header y el último el propio frame descomprimido.
         - Si el buffer esta bloqueado se devuelven 3 elementos: -1, una lista vacia
         y un numpy array vacio.
     '''
-    global buffer_num
+    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps
     if(not block[0]):
         if(len(buffer) == 1):
             with buffer_lock:
                 return buffer[0]
         else:
             with buffer_lock:
+                #Añadimos el numero de paquetes perdidos
+                if(buffer_num != -1 ):
+                    packets_lost_now = buffer[0][0] - buffer_num -1
+                    if(packets_lost_now < 0):
+                        packets_lost_now = 0
+                    packets_lost += packets_lost_now
+                    packets_lost_total[0] += packets_lost_now
+
+                time_epoch = time.time()
+
+                #Ajustamos la calidad de compresión cada segundo
+                if(time_epoch - time_last_check_qual > 1.0):
+                    if(packets_lost < 2):
+                        quality[0] = 75
+                    elif(packets_lost < 8):
+                        quality[0] = 50
+                    else:
+                        quality[0] = 25
+
+                    time_last_check_qual = time_epoch
+
+                #Ajustamos los fps cada cinco segundos
+                if(time_epoch - time_last_check_fps > 5.0):
+                    if(packets_lost < 2):
+                        fps[0] = 40
+                    elif(packets_lost < 8):
+                        fps[0] = 30
+                    else:
+                        fps[0] = 20
+                    packets_lost = 0
+
+                    time_last_check_fps = time_epoch
+
                 #Actualizamos el buffer num al numero del header del primer elemento
                 buffer_num = buffer[0][0]
                 return heapq.heappop(buffer)
