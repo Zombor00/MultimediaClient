@@ -371,8 +371,8 @@ class VideoClient(object):
                 self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
 
                 #Popeamos el elemento a mostrar
-                num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.packets_lost_total)
-
+                num, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total)
+                self.setImageResolution(self.resolution_send[0])
                 #Actualizamos la GUI
                 if(len(header) >= 4):
                     string = "Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime)))
@@ -426,7 +426,7 @@ class VideoClient(object):
                 self.rec_frame = np.copy(frame_rec)
 
             self.updateScreen()
-            
+
             #Pausa el tiempo que quede para mandar a ritmo FPS_recv
             remaining = 1/self.fps_recv - (time.time() - receive_start_time)
             if(remaining > 0):
@@ -476,17 +476,13 @@ class VideoClient(object):
         '''
         Nombre: setImageResolution
         Descripcion: Ajusta la resolucion con la que se captura la imagen.
-        Argumentos: resolution puede ser LOW MEDIUM o HIGH.
+        Argumentos: Resolution en achura x altura
         '''
-        if resolution == "LOW":
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 160)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 120)
-        elif resolution == "MEDIUM":
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-        elif resolution == "HIGH":
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        resolution = resolution.split('x')
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(resolution[0]))
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(resolution[1]))
 
     def toolbarCallback(self,button):
         '''

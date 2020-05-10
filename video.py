@@ -19,7 +19,11 @@ timemax = -1 #Retardo fijo. No se reproduciran paquetes pasado este retardo fijo
 BUFFER_SIZE = 256 #Tamano maximo para el buffer.
 BUFFER_THRESHOLD = 10 #Numero de frames que han tenido que llegar para que se reproduzcan frames
 FIXED_DELAY_THRESHOLD = 0.25 #Milisegundos de margen que se permiten como mucho para el retardo fijo.
-
+FPS_REFRESH = 5.0 #Cada cuanto se intenta reajustar los fps
+QUALITY_REFRESH = 1.0 #Cada cuanto se intenta reajustar la calidad de compresion
+RESOLUTION_REFRESH = 10.0 #Cada cuanto se intenta reajustar la resolucion del video
+MEDIUM_LOST = 1/15 #Fraccion de frames perdida por segundo que se considera mediocre
+WORST_LOST = 4/15 #Fraccion de frames perdida por segundo que se considera mala
 def send_frame(socket_video,status,frame,numOrden, quality ,resolution,fps):
     '''
     Nombre: send_frame
@@ -63,15 +67,17 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
     Retorno:
         None
     '''
-    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps, timemax
+    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps, timemax, time_last_check_res
 
     #Inicializar las variables de control
     buffer_num = -1
     last_packet = -1
-    packets_lost = 0
+    packets_lost = [0,0,0]
     time_last_check_qual = time.time()
     time_last_check_fps = time.time()
-    
+    time_last_check_res = time.time()
+
+
     while True:
         data, _ = socket_video_rec.recvfrom(65535)
 
@@ -104,7 +110,7 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
                 if(len(buffer_video) > BUFFER_THRESHOLD):
                     buffer_block[0] = False
 
-def pop_frame(buffer, block, quality, fps, packets_lost_total):
+def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
     '''
     Nombre: pop_frame
     Descripcion: Extrae un elemento del buffer. Cada elemento es una tripla que
@@ -117,6 +123,7 @@ def pop_frame(buffer, block, quality, fps, packets_lost_total):
                 Datos que actualiza la funcion (deben pasarse por referencia, envueltos en una lista):
                 quality: Calidad con la que se están comprimiendo los frames
                 fps: Frames que se envian al segundos
+                resolution: Resolucion a la que se captura la imagen
                 packets_lost_total: Numero total de paquetes perdidos esta llamada
     Retorno:
         - Si hay elementos: se devuelven 3 elementos. El primero es el numero
@@ -124,11 +131,14 @@ def pop_frame(buffer, block, quality, fps, packets_lost_total):
         - Si el buffer esta bloqueado se devuelven 3 elementos: -1, una lista vacia
         y un numpy array vacio.
     '''
-    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps
+    global buffer_num, last_packet, packets_lost, time_last_check_qual, time_last_check_fps, time_last_check_res
     if(not block[0]):
         with buffer_lock:
 
             time_epoch = time.time()
+
+            #Guardamos los fps a los que se envio el frame que vamos a leer
+            fps_entrante = int(buffer[0][1][3])
 
             #Si el paquete que toca sacar esta muy retrasado, lo descartamos y sacamos otro
             #buffer[0] -> paquete que toca sacar
@@ -143,31 +153,46 @@ def pop_frame(buffer, block, quality, fps, packets_lost_total):
                 packets_lost_now = buffer[0][0] - buffer_num -1
                 if(packets_lost_now < 0):
                     packets_lost_now = 0
-                packets_lost += packets_lost_now
+                packets_lost[0] += packets_lost_now
+                packets_lost[1] += packets_lost_now
+                packets_lost[2] += packets_lost_now
+
                 packets_lost_total[0] += packets_lost_now
 
             #Ajustamos la calidad de compresión cada segundo
-            if(time_epoch - time_last_check_qual > 1.0):
-                if(packets_lost < 2):
+            if(time_epoch - time_last_check_qual > QUALITY_REFRESH):
+                if(packets_lost[0] < MEDIUM_LOST * QUALITY_REFRESH * fps_entrante):
                     quality[0] = 75
-                elif(packets_lost < 8):
+                elif(packets_lost[0] < WORST_LOST * QUALITY_REFRESH * fps_entrante):
                     quality[0] = 50
                 else:
                     quality[0] = 25
-
+                packets_lost[0] = 0
                 time_last_check_qual = time_epoch
 
             #Ajustamos los fps cada cinco segundos
-            if(time_epoch - time_last_check_fps > 5.0):
-                if(packets_lost < 2):
+            if(time_epoch - time_last_check_fps > FPS_REFRESH):
+                if(packets_lost[1] < MEDIUM_LOST * FPS_REFRESH * fps_entrante):
                     fps[0] = 40
-                elif(packets_lost < 8):
+                elif(packets_lost[1] < WORST_LOST * FPS_REFRESH * fps_entrante):
                     fps[0] = 30
                 else:
                     fps[0] = 20
-                packets_lost = 0
+                packets_lost[1] = 0
 
                 time_last_check_fps = time_epoch
+
+            #Ajustamos la resolucion cada diez segundos
+            if(time_epoch - time_last_check_res > RESOLUTION_REFRESH):
+                if(packets_lost[2] < MEDIUM_LOST * RESOLUTION_REFRESH * fps_entrante):
+                    resolution[0] = "640x480"
+                elif(packets_lost[2] < WORST_LOST * RESOLUTION_REFRESH * fps_entrante):
+                    resolution[0] = "320x240"
+                else:
+                    resolution[0] = "160x120"
+                packets_lost[2] = 0
+
+                time_last_check_res = time_epoch
 
             #Actualizamos el buffer num al numero del header del primer elemento
             buffer_num = buffer[0][0]
