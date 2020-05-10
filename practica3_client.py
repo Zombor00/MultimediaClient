@@ -309,18 +309,22 @@ class VideoClient(object):
                 self.setImageResolution(self.resolution_send[0])
                 self.resolution_send_old[0] = self.resolution_send[0]
 
-
             # Capturamos un frame de la cámara o del vídeo
             ret, frame = self.cap.read()
             #Bucle si el video acaba
             if not ret:
-                self.cap = cv2.VideoCapture(self.currently_playing_file)
-                ret,frame = self.cap.read()
-                #Error
-                if not ret:
-                    self.app.errorBox("Error fatal", "El video/camara que se estaba reproduciendo no se encuentra. Puede deberse a que este en uso por otra aplicacion.")
-                    self.app.stop()
-                    return
+                if self.currently_playing_file:
+                    self.cap = cv2.VideoCapture(self.currently_playing_file)
+                    ret,frame = self.cap.read()
+                    #Error
+                    if not ret:
+                        self.app.errorBox("Error fatal", "El video/camara que se estaba reproduciendo no se encuentra. Puede deberse a que este en uso por otra aplicacion.")
+                        self.app.stop()
+                        return
+                else:
+                    self.cap = cv2.VideoCapture(0)
+                    continue
+
             frame = cv2.resize(frame, (640,480))
             # Código que envia el frame a la red
             status = call_status()
@@ -367,7 +371,6 @@ class VideoClient(object):
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
 
                 if(self.boolResetFrame == 1):
-                    self.num = 0
                     self.boolResetFrame = 0
                     self.startTime = time.time()
                     self.receive_loop = threading.Thread(target=receive_frame, args = (self.socket_video_rec, self.buffer_video, self.buffer_block))
@@ -413,15 +416,16 @@ class VideoClient(object):
                 self.app.setStatusbar("Cliente listo para llamar.",field=0)
                 self.app.setStatusbar("" ,field=2)
                 if(self.boolResetFrame != 1):
+                    self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(get_video_port())))
+                    self.receive_loop.join()
                     self.buffer_block = [True]
                     self.boolResetFrame = 1
                     self.fps_recv = 30
+                    self.num = 0
                     self.quality_send[0] = 50
                     self.packets_lost_total[0] = 0
                     self.rec_frame = np.array([])
                     self.buffer_video = list()
-                    self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(get_video_port())))
-                    self.receive_loop.join()
                     print("Hilo de recepción de video recogido.")
 
             #Lo ponemos al tamano del marco de la GUI

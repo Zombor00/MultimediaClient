@@ -72,11 +72,17 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
     #Inicializar las variables de control
     buffer_num = -1
     last_packet = -1
+    timemax = -1
     packets_lost = [0,0,0]
     time_last_check_qual = time.time()
     time_last_check_fps = time.time()
     time_last_check_res = time.time()
 
+    #Vaciar el socket
+    socket_video_rec.setblocking(0)
+    while socket_video_rec.recvfrom(65535):
+        pass
+    socket_video_rec.setblocking(1)
 
     while True:
         data, _ = socket_video_rec.recvfrom(65535)
@@ -105,7 +111,6 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
             with buffer_lock:
                 if((buffer_num < int(header[0]))):
                     heapq.heappush(buffer_video,(int(header[0]),header,decimg))
-
                 #Levantamos el buffer cuando haya un poco de cantidad
                 if(len(buffer_video) > BUFFER_THRESHOLD):
                     buffer_block[0] = False
