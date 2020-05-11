@@ -211,7 +211,7 @@ class VideoClient(object):
 
         #Obtenemos IP externa
         try:
-            ip_req = requests.get('http://ip.jsontest.com/').json()
+            ip_req = requests.get('https://api.ipify.org?format=json').json()
             self.app.setEntry("ipInput", ip_req["ip"], callFunction=False)
         except (requests.exceptions.RequestException, json.JSONDecodeError):
             print("ADVERTENCIA: Error obteniendo IP desde recurso externo. El usuario debera introducirla.")
