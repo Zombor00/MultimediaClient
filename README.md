@@ -11,7 +11,7 @@ que se ejecuta el cliente. Asimismo, si se dispone de un firewall en algun punto
 el paso de los paquetes con esos puertos. Para usar el cliente en local no es necesario, lógicamente.
 
 ## Registro del usuario
-Al lanzarse la aplicación, el cliente se conecta al servidor de descubrimiento para registrar al usuario.
+Al lanzarse la aplicación ejecutando _python3 practica3_client.py_ , el cliente se conecta al servidor de descubrimiento para registrar al usuario.
 (En caso de que esta conexión falle (por ejemplo, porque no se disponga de conexión a internet, o el servidor
 este caído), la aplicación se cerrará mostrando un mensaje de error).
 
