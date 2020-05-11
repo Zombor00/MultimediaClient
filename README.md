@@ -53,4 +53,4 @@ Durante una llamada, el usuario puede hacer clic en _Espera_ para poner la llama
 es decir, un usuario puede poner la llamada en espera y posteriormente el otro también. Hasta que los 2 usuarios no retiren su espera, no continuará la llamada. En la
 parte inferior izquierda (barra de estado), se puede ver en todo momento quién ha puesto la llamada en espera.
 
-Asimismo, se puede finalizar la llamada pulsando el botón de _colgar_, o saliendo de la aplicación.
+Asimismo, se puede finalizar la llamada pulsando el botón de _colgar_ (para realizar otra llamada posterior), o saliendo de la aplicación.
