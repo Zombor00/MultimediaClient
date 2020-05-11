@@ -391,7 +391,7 @@ class VideoClient(object):
             #Con quien estamos conectados
             connecting_to = get_connected_username()
 
-            # Código que envia el frame a la red
+            # Código que recoge el frame a imprimir por pantalla
             status = call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
 
@@ -420,7 +420,7 @@ class VideoClient(object):
                     string += " Resolucion: " + str(header[2])
                     string += " Perdidos: " + str(self.packets_lost_total[0])
                     self.app.setStatusbar(string ,field=2)
-                    self.fps_recv = int(header[3])
+                    self.fps_recv = int(header[3]),
                 else:
                     #Aun no hay frames suficientes en el buffer: icono de carga
                     self.app.setStatusbar("Duracion: " + str(time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime))) ,field=2)
