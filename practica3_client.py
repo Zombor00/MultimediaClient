@@ -72,6 +72,10 @@ class VideoClient(object):
 
         # Añadir los botones
         self.app.addButtons(["Conectar", "Espera", "Colgar", "Salir"], self.buttonsCallback)
+        self.app.enableButton("Conectar")
+        self.app.disableButton("Espera")
+        self.app.disableButton("Colgar")
+
 
         # Barra de estado
         # Debe actualizarse con información útil sobre la llamada (duración, FPS, etc...)
@@ -393,6 +397,9 @@ class VideoClient(object):
 
                 #Si es el primer tick en el que se ha entrado aqui, preparar lo necesario
                 if(self.boolResetFrame == 1):
+                    self.app.disableButton("Conectar")
+                    self.app.enableButton("Espera")
+                    self.app.enableButton("Colgar")
                     self.boolResetFrame = 0
                     self.startTime = time.time()
                     #Hilo de RECOGIDA: Recoge paquetes de video entrantes continuamente, de manera asincrona.
@@ -435,6 +442,9 @@ class VideoClient(object):
                 #LLAMANDO
                 frame_rec = cv2.imread("imgs/calling.jpg")
                 self.app.setStatusbar("Llamando a " + connecting_to,field=0)
+                self.app.disableButton("Conectar")
+                self.app.disableButton("Espera")
+                self.app.disableButton("Colgar")
 
             else:
                 #NO EN LLAMADA
@@ -461,6 +471,11 @@ class VideoClient(object):
                     
                     #Vaciado del buffer
                     self.buffer_video = list()
+
+                    #Reactivar botones
+                    self.app.enableButton("Conectar")
+                    self.app.disableButton("Espera")
+                    self.app.disableButton("Colgar")
                     print("Hilo de recepción de video recogido.")
 
             #Una vez obtenido el frame entrante, lo reescalamos para que entre en la gui.
@@ -628,12 +643,24 @@ class VideoClient(object):
         #Todas las ventanas de informacion se muestran en segundo plano para no bloquear la GUI.
         if ret == -2:
             self.app.thread(self.app.infoBox,"Usuario ocupado", "El usuario al que llama está ocupado.")
+            self.app.enableButton("Conectar")
+            self.app.disableButton("Espera")
+            self.app.disableButton("Colgar")
         elif ret == -3:
             self.app.thread(self.app.infoBox,"Llamada rechazada", "El usuario indicado rechazó la llamada.")
+            self.app.enableButton("Conectar")
+            self.app.disableButton("Espera")
+            self.app.disableButton("Colgar")
         elif ret == -1:
             self.app.thread(self.app.errorBox,"Error durante la llamada", "No ha podido establecerse la conexión con el usuario indicado.")
+            self.app.enableButton("Conectar")
+            self.app.disableButton("Espera")
+            self.app.disableButton("Colgar")
         else:
             self.app.thread(self.app.infoBox,"Conectado", "Se ha conectado exitosamente al usuario objetivo.")
+            self.app.disableButton("Conectar")
+            self.app.enableButton("Espera")
+            self.app.enableButton("Colgar")
 
     def list_handler(self):
         '''
