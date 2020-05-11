@@ -165,6 +165,8 @@ class VideoClient(object):
         if self.command_loop:
             control_incoming_stop()
             self.command_loop.join()
+        self.socket_video_send.close()
+        self.socket_video_rec.close()
         server_quit()
         #Notificar a la GUI de que hay que parar.
         self.app.stop()
