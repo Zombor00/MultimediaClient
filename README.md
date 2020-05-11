@@ -54,3 +54,8 @@ es decir, un usuario puede poner la llamada en espera y posteriormente el otro t
 parte inferior izquierda (barra de estado), se puede ver en todo momento quién ha puesto la llamada en espera.
 
 Asimismo, se puede finalizar la llamada pulsando el botón de _colgar_ (para realizar otra llamada posterior), o saliendo de la aplicación.
+
+## Pruebas realizadas
+Hemos probado el funcionamiento tanto en local como a través de la red entre nosotros y contra clientes de otros compañeros y no hemos detectado ningún problema. También hemos probado con el script _simulate_internet.sh_, 
+en local, y se aprecian las pérdidas y retardos por lo que el programa baja la calidad como se espera. Cuando probamos en local con los 2 clientes por loopback con la corrupción de paquetes,
+funciona correctamente aunque a veces algunos mensajes TCP que no deberían perderse dan algún fallo, quizás debido a la corrupción de los paquetes de control TCP (no estamos seguros).
