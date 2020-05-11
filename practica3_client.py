@@ -39,6 +39,8 @@ class VideoClient(object):
     buffer_block = [True] #Indicara al buffer si puede sacar frames o no. Solo lo levantaremos cuando este parcialmente lleno.
     currently_playing_file = None #Nombre del fichero que se esta enviando actualmente.
     fps_send = [30] #FPS para el video saliente
+    fps_send_min = 20 #FPS minimos posibles que el QoS puede poner
+    fps_send_max = 60 #FPS maximos posibles que el QoS puede poner
     fps_recv = 20 #FPS para el video entrante
     quality_send = [50] #Calidad de compresión del video saliente
     resolution_send = ["640x480"] # Resolucion a la que se envía el video
@@ -69,6 +71,11 @@ class VideoClient(object):
         # Registramos la función de captura de video
         # Esta misma función también sirve para enviar un vídeo
         self.cap = cv2.VideoCapture(0)
+
+        #FPS minimo y maximo para el QoS
+        self.fps_send_max = int(self.cap.get(cv2.CAP_PROP_FPS))
+        self.fps_send_min = self.fps_send_min // 2
+        self.fps_send = [self.fps_send_max]
 
         # Añadir los botones
         self.app.addButtons(["Conectar", "Espera", "Colgar", "Salir"], self.buttonsCallback)
@@ -165,8 +172,10 @@ class VideoClient(object):
         if self.command_loop:
             control_incoming_stop()
             self.command_loop.join()
-        self.socket_video_send.close()
-        self.socket_video_rec.close()
+        if self.socket_video_send:
+            self.socket_video_send.close()
+        if self.socket_video_rec:
+            self.socket_video_rec.close()
         server_quit()
         #Notificar a la GUI de que hay que parar.
         self.app.stop()
@@ -413,7 +422,7 @@ class VideoClient(object):
                 self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
 
                 #Popeamos el elemento a mostrar
-                _, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total)
+                _, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total,self.fps_send_min,self.fps_send_max)
 
                 #Actualizamos la GUI
                 if(len(header) >= 4):
@@ -562,6 +571,10 @@ class VideoClient(object):
                     self.app.errorBox("Error abriendo fichero", "El fichero no es correcto.")
                     return
                 self.currently_playing_file = f
+                #Acutalizar umbral de FPS
+                self.fps_send_max = round(self.cap.get(cv2.CAP_PROP_FPS))
+                self.fps_send_min = self.fps_send_max
+                self.fps_send = [self.fps_send_max]
         elif button == "CAMERA":
             if self.app.yesNoBox("Activar camara", "Quieres activar la videocamara?") == True:
                 try:
@@ -570,6 +583,10 @@ class VideoClient(object):
                     self.app.errorBox("Error activando camara", "No se ha detectado ninguna camara")
                     return
                 self.currently_playing_file = None
+                #Acutalizar umbral de FPS
+                self.fps_send_max = int(self.cap.get(cv2.CAP_PROP_FPS))
+                self.fps_send_min = self.fps_send_max // 2
+                self.fps_send = [self.fps_send_max]
 
     def buttonsCallback(self, button):
         '''

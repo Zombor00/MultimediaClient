@@ -131,7 +131,7 @@ def receive_frame(socket_video_rec,buffer_video,buffer_block):
                 if(len(buffer_video) > BUFFER_THRESHOLD):
                     buffer_block[0] = False
 
-def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
+def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total, min_fps=20, max_fps=40):
     '''
     Nombre: pop_frame
     Descripcion: Extrae un elemento del buffer. Cada elemento es una tripla que
@@ -140,6 +140,8 @@ def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
                 heap.
     Argumentos: buffer: Heap del que se extrae la tripla.
                 block: Indica si está bloqueada la extraccion de frames.
+                min_fps : Valor minimo de fps que el QoS puede ajustar.
+                max_fps : Valor maximo de fps que el QoS puede ajustar.
 
                 Datos que actualiza la funcion (deben pasarse por referencia, envueltos en una lista):
                 quality: Calidad con la que se están comprimiendo los frames
@@ -201,11 +203,11 @@ def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total):
             #Ajustamos los fps cada FPS_REFRESH
             if(time_epoch - time_last_check_fps > FPS_REFRESH):
                 if(packets_lost[1] < MEDIUM_LOST * FPS_REFRESH * fps_entrante):
-                    fps[0] = 40
+                    fps[0] = max_fps
                 elif(packets_lost[1] < WORST_LOST * FPS_REFRESH * fps_entrante):
-                    fps[0] = 30
+                    fps[0] = (max_fps + min_fps) // 2
                 else:
-                    fps[0] = 20
+                    fps[0] = min_fps
                 packets_lost[1] = 0
                 time_last_check_fps = time_epoch
 
