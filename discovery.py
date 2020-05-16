@@ -7,12 +7,10 @@
 '''
 
 import socket
+from config import *
 
 socket_timeout = 3 #Timeout para la conexion
-
 server_socket = None #Socket del servidor.
-server_ip = "vega.ii.uam.es"
-server_port = 8000
 
 def server_init():
     '''

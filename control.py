@@ -22,13 +22,12 @@
 
 import socket
 from discovery import query_user
+from config import *
 import threading
 import json
 
 # Parametros
 socket_timeout = 2 #Timeout para receive en casos criticos.
-call_timeout = 15 #Timeout para responder a la llamada
-user_filename = "usuario.json" #Fichero de usuario
 
 # ESTADO ACTUAL
 

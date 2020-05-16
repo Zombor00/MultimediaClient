@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 import threading
 import heapq
+from config import *
 
 #Variables globales de estado del modulo
 buffer_lock = threading.Lock() #Cerrojo para el buffer en los 2 hilos (recepcion de la red y extraccion para reproducir)
@@ -21,14 +22,6 @@ packets_lost = [0,0,0] #3 contadores de paquetes uno para cada ajuste (calidad,F
 time_last_check_qual = -1 #Timestamp con la ultima vez que se intento actualizar la calidad
 time_last_check_fps = -1 #Timestamp con la ultima vez que se intentaron actualizar los FPS
 time_last_check_res = -1 #Timestamp con la ultima vez que se intento actualizar la resolucion
-
-#Parametros constantes del QoS
-BUFFER_SIZE = 256 #Tamano maximo para el buffer.
-BUFFER_THRESHOLD = 10 #Numero de frames que han tenido que llegar para que se reproduzcan frames
-FIXED_DELAY_THRESHOLD = 0.25 #Milisegundos de margen que se permiten como mucho para el retardo fijo.
-FPS_REFRESH = 5.0 #Cada cuanto se intenta reajustar los fps
-QUALITY_REFRESH = 1.0 #Cada cuanto se intenta reajustar la calidad de compresion
-RESOLUTION_REFRESH = 10.0 #Cada cuanto se intenta reajustar la resolucion del video
 
 #MEDIDAS PARA AJUSTAR QoS. Cada valor es una fraccion de frames. 
 # Por ejemplo, si desde la ultima comprobacion debieron llegar 

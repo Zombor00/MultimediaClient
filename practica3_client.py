@@ -19,6 +19,7 @@ import time
 from discovery import server_init, server_quit, register_user, query_user, list_users
 from control import *
 from video import *
+from config import read_config
 import requests #Para hacer la peticion de ip externa
 
 class VideoClient(object):
@@ -708,6 +709,9 @@ class VideoClient(object):
 #PROGRAMA PRINCIPAL
 
 if __name__ == '__main__':
+
+    #Leemos la configuración del programa
+    read_config()
 
     #Crear objeto GUI
     vc = VideoClient("1280x720")
