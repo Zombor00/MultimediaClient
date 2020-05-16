@@ -42,9 +42,9 @@ class Discovery():
             self.server_socket = None
             raise Exception("La conexion al server de descubrimiento ha dado timeout.")
 
-    def __del__(self):
+    def server_quit(self):
         '''
-            Nombre: __del__
+            Nombre: server_quit
             Descripcion: Termina la conexion con el servidor, informando al server y limpiando recursos.
             Argumentos:
             Retorno:

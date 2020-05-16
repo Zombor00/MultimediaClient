@@ -188,7 +188,7 @@ class VideoClient(object):
             self.socket_video_rec.close()
         if self.discovery:
             #Desconexion de discovery
-            del self.discovery
+            self.discovery.server_quit()
         #Notificar a la GUI de que hay que parar.
         self.app.stop()
 
@@ -376,7 +376,7 @@ class VideoClient(object):
 
             #Almacenamos finalmente el frame
             with self.cap_frame_lock:
-                self.cap_frame = np.copy(frame)
+                self.cap_frame = frame
 
             #Actualizacion de informacion
             string_field1 = "Video propio: " + str(self.fps_send[0]) + " FPS"
@@ -504,7 +504,7 @@ class VideoClient(object):
 
             #Lo almacenamos
             with self.rec_frame_lock:
-                self.rec_frame = np.copy(frame_rec)
+                self.rec_frame = frame_rec
 
             #Actualizamos la pantalla
             self.updateScreen()
@@ -533,9 +533,9 @@ class VideoClient(object):
         pinta en la pantalla.
         '''
         with self.rec_frame_lock:
-            frame_rec = np.copy(self.rec_frame)
+            frame_rec = self.rec_frame
         with self.cap_frame_lock:
-            frame = np.copy(self.cap_frame)
+            frame = self.cap_frame
 
         #Mostrar frame capturado
         if frame_rec.size != 0 and frame.size != 0:
