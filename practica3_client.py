@@ -16,16 +16,17 @@ import threading
 import socket
 import json
 import time
-from discovery import server_init, server_quit, register_user, query_user, list_users
-from control import *
-from video import *
-from config import read_config
+from discovery import Discovery
+from control import Control
+from video import VideoBuffer
+from config import config_parser
 import requests #Para hacer la peticion de ip externa
 
 class VideoClient(object):
 
     #PARAMETROS DE CONTROL DEL CLIENTE DE VIDEO
 
+    discovery = None #Objeto que gestiona la conexion al server de descubrimiento
     connection_loop = None #Hilo que despacha las conexiones entrantes
     command_loop = None #Hilo que atiende a los comandos de llamada entrantes
     frame_send_loop = None #Hilo que envia los frames al ritmo correcto
@@ -36,8 +37,7 @@ class VideoClient(object):
     socket_video_send = None #Socket UDP para enviar video
     socket_video_rec = None #Socket UDP para recibir video
     num = 0 #Numero de secuencia del frame actual
-    buffer_video = None #Buffer con los frames de video
-    buffer_block = [True] #Indicara al buffer si puede sacar frames o no. Solo lo levantaremos cuando este parcialmente lleno.
+    buffer_video = None #Objeto de buffer de video
     currently_playing_file = None #Nombre del fichero que se esta enviando actualmente.
     fps_send = [30] #FPS para el video saliente
     fps_send_min = 20 #FPS minimos posibles que el QoS puede poner
@@ -53,6 +53,8 @@ class VideoClient(object):
     rec_frame_lock = threading.Lock() #Lock para recepcion de video
     update_screen_lock = threading.Lock() #Para evitar que receptor y emisor actualicen la pantalla a la vez.
     program_quit = False #Indica si han solicitado cerrar el programa.
+    config = None #Objeto con parametros de configuracion
+    control = None #Objeto del modulo de control
 
     def __init__(self, window_size):
         '''
@@ -60,6 +62,13 @@ class VideoClient(object):
         Descripcion: Constructor del cliente de video
         Argumentos: window_size: Tamano de la ventana.
         '''
+
+        #Creamos el objeto de configuracion
+        self.config = config_parser()
+
+        #Creamos el objeto de buffer de video
+        self.buffer_video = VideoBuffer(self.config)
+
         # Creamos una variable que contenga el GUI principal
         self.app = gui("Redes2 - P2P", window_size)
         self.app.setGuiPadding(10,10)
@@ -168,16 +177,18 @@ class VideoClient(object):
         if self.frame_recv_loop:
             self.frame_recv_loop.join()
         if self.connection_loop:
-            control_listen_stop()
+            self.control.control_listen_stop()
             self.connection_loop.join()
         if self.command_loop:
-            control_incoming_stop()
+            self.control.control_incoming_stop()
             self.command_loop.join()
         if self.socket_video_send:
             self.socket_video_send.close()
         if self.socket_video_rec:
             self.socket_video_rec.close()
-        server_quit()
+        if self.discovery:
+            #Desconexion de discovery
+            del self.discovery
         #Notificar a la GUI de que hay que parar.
         self.app.stop()
 
@@ -204,11 +215,15 @@ class VideoClient(object):
         Descripcion: Manejador de inicio de la aplicacion. Se ejecuta al comenzar la app.
         '''
         #Conexion a Discovery
-        ret = server_init()
-        if ret == -1:
+        try:
+            self.discovery = Discovery(self.config.server_ip, self.config.server_port)
+        except Exception as e:
+            print(e)
             self.app.errorBox("Error", "No se ha podido establecer la conexion al servidor de descubrimiento.")
             self.app.stop()
             return
+
+        self.control = Control(self.discovery, self.config.call_timeout, self.config.user_filename)
 
         #Obtenemos IP externa
         try:
@@ -219,7 +234,7 @@ class VideoClient(object):
 
         #Tratemos de obtener datos preexistentes
         try:
-            with open(user_filename, "r") as file:
+            with open(self.config.user_filename, "r") as file:
                 data = json.load(file)
                 self.app.setEntry("userInput", data["username"],callFunction=False)
                 self.app.setEntry("tcpInput", data["tcp_port"],callFunction=False)
@@ -271,7 +286,7 @@ class VideoClient(object):
 
         #Realizamos el registro en el discovery
         print("Tratando de registrar a " + register_nick + " con clave " + password + " puerto:" + control_port + " ip:" + ip + " puerto de video: " + video_port)
-        ret = register_user(register_nick,password, ip, control_port)
+        ret = self.discovery.register_user(register_nick,password, ip, control_port)
         if not ret:
             #Error
             self.app.errorBox("Error", "No se ha podido realizar el registro correctamente. Error del servidor de descubrimiento.",parent="Login")
@@ -286,10 +301,6 @@ class VideoClient(object):
         self.app.setLabel("loggeduser", "Sesion iniciada como: " + register_nick)
         self.listen_control_port = control_port
 
-        #Iniciamos el buffer de video
-        self.buffer_video = list()
-        self.buffer_block = [True]
-
         #Iniciamos los sockets de video
         self.socket_video_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket_video_rec = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -297,9 +308,9 @@ class VideoClient(object):
 
         #Hilos de recepcion y envio:
         #CONEXION: Atiende conexiones nuevas que entren gestionando los intentos de llamada (ACCEPT/DENY/BUSY)
-        self.connection_loop = threading.Thread(target=control_listen_loop, args = (self.listen_control_port,self.app))
+        self.connection_loop = threading.Thread(target=self.control.control_listen_loop, args = (self.listen_control_port,self.app))
         #COMANDOS: Responde a los comandos que entren a traves de una llamada entrante. Esta bloqueado mientras no hay llamadas.
-        self.command_loop = threading.Thread(target=control_incoming_loop, args = (self.app,))
+        self.command_loop = threading.Thread(target=self.control.control_incoming_loop, args = (self.app,))
         self.connection_loop.start()
         self.command_loop.start()
         #ENVIO: Muestra por pantalla (y si es necesario envia por la red) los frames al ritmo adecuado
@@ -311,7 +322,7 @@ class VideoClient(object):
 
         #Almacenamos datos relevantes del usuario en formato JSON
         user_data = {"username":register_nick, "tcp_port":control_port, "udp_port":video_port}
-        with open(user_filename, "w+") as file:
+        with open(self.config.user_filename, "w+") as file:
             json.dump(user_data,file, indent=4)
 
         #Mostrar ventana principal
@@ -355,10 +366,10 @@ class VideoClient(object):
             frame = cv2.resize(frame, (640,480))
 
             # Código que envia el frame a la red en caso de que se este en llamada
-            status = call_status()
+            status = self.control.call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
                 #Enviamos el frame
-                errorSend = send_frame(self.socket_video_send, (status[0],int(status[1])), frame, self.num, self.quality_send[0],self.resolution_send[0], self.fps_send[0])
+                errorSend = self.buffer_video.send_frame(self.socket_video_send, (status[0],int(status[1])), frame, self.num, self.quality_send[0],self.resolution_send[0], self.fps_send[0])
                 if(errorSend == -1):
                     print("Error sending message")
                 self.num += 1
@@ -401,10 +412,10 @@ class VideoClient(object):
             receive_start_time = time.time()
 
             #Con quien estamos conectados
-            connecting_to = get_connected_username()
+            connecting_to = self.control.get_connected_username()
 
             # Código que recoge el frame a imprimir por pantalla
-            status = call_status()
+            status = self.control.call_status()
             if(status[0] != None and status[0] != "HOLD1" and status[0] != "HOLD2"):
 
                 #Si es el primer tick en el que se ha entrado aqui, preparar lo necesario
@@ -415,15 +426,15 @@ class VideoClient(object):
                     self.boolResetFrame = 0
                     self.startTime = time.time()
                     #Hilo de RECOGIDA: Recoge paquetes de video entrantes continuamente, de manera asincrona.
-                    self.receive_loop = threading.Thread(target=receive_frame, args = (self.socket_video_rec, self.buffer_video, self.buffer_block))
+                    self.receive_loop = threading.Thread(target=self.buffer_video.receive_frame, args = (self.socket_video_rec,))
                     self.receive_loop.start()
                     print("Hilo de recepción de video iniciado.")
 
                 #Actualizar informacion
-                self.app.setStatusbar("En llamada con: " + get_connected_username() ,field=0)
+                self.app.setStatusbar("En llamada con: " + self.control.get_connected_username() ,field=0)
 
                 #Popeamos el elemento a mostrar
-                _, header, frame_rec = pop_frame(self.buffer_video,self.buffer_block, self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total,self.fps_send_min,self.fps_send_max)
+                _, header, frame_rec = self.buffer_video.pop_frame(self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total,self.fps_send_min,self.fps_send_max)
 
                 #Actualizamos la GUI
                 if(len(header) >= 4):
@@ -441,7 +452,7 @@ class VideoClient(object):
             elif status[0] == "HOLD1":
                 #EN ESPERA POR NUESTRA PARTE
                 frame_rec = cv2.imread("imgs/call_held.png")
-                self.app.setStatusbar("Llamada en espera por " + get_username() ,field=0)
+                self.app.setStatusbar("Llamada en espera por " + self.control.get_username() ,field=0)
                 self.app.setStatusbar("Duracion: " + time.strftime('%H:%M:%S',time.gmtime(time.time() - self.startTime) ) ,field=2)
 
             elif status[0] == "HOLD2":
@@ -467,11 +478,8 @@ class VideoClient(object):
                 if(self.boolResetFrame != 1):
 
                     #Parar hilo de RECOGIDA
-                    self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(get_video_port())))
+                    self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(self.control.get_video_port())))
                     self.receive_loop.join()
-
-                    #Bloquear de nuevo el buffer
-                    self.buffer_block = [True]
 
                     #Reinicio de parametros
                     self.boolResetFrame = 1
@@ -482,7 +490,7 @@ class VideoClient(object):
                     self.rec_frame = np.array([])
                     
                     #Vaciado del buffer
-                    self.buffer_video = list()
+                    self.buffer_video.empty_buffer()
 
                     #Reactivar botones
                     self.app.enableButton("Conectar")
@@ -509,12 +517,11 @@ class VideoClient(object):
         #Fin del hilo: liberar recursos, si los hubiese.
 
         if(self.boolResetFrame != 1):
-            self.buffer_block = [True]
             self.boolResetFrame = 1
             self.fps_recv = 30
             self.rec_frame = np.array([])
-            self.buffer_video = list()
-            self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(get_video_port())))
+            self.buffer_video.empty_buffer()
+            self.socket_video_send.sendto(b'END_RECEPTION',('localhost',int(self.control.get_video_port())))
             self.receive_loop.join()
             print("Hilo de recepción de video recogido.")
         print("Hilo de procesado de video entrante recogido.")
@@ -598,7 +605,7 @@ class VideoClient(object):
         if button == "Salir":
 
             #Si esta en llamada se cuelga.
-            if call_status()[0] != None:
+            if self.control.call_status()[0] != None:
                 self.buttonsCallback("Colgar")
             # Salimos de la aplicación
             self.app.stop()
@@ -611,25 +618,25 @@ class VideoClient(object):
             self.app.showSubWindow("Iniciar llamada")
 
         elif button == "Colgar":
-            ret = end_call()
+            ret = self.control.end_call()
             if ret == -1:
                 self.app.warningBox("Advertencia.", "No está en llamada con ningún usuario.")
                 return
-            if control_disconnect() != -1:
+            if self.control.control_disconnect() != -1:
                 self.app.infoBox("Desconexion", "Ha sido desconectado del destinatario.")
 
         elif button == "Espera":
-            status = call_status()
+            status = self.control.call_status()
             if status[0] == "HOLD1":
                 #Ya estamos en espera. Desactivar.
-                ret = set_on_hold(False)
+                ret = self.control.set_on_hold(False)
                 if ret == 0:
                     self.app.infoBox("Operación correcta.", "Se ha desactivado el modo espera.")
                 else:
                     self.app.warningBox("Advertencia.", "No se ha podido desactivar el modo espera porque no esta en llamada.")
             elif status[0] != None:
                 #Activar
-                ret = set_on_hold(True)
+                ret = self.control.set_on_hold(True)
                 if ret == 0:
                     self.app.infoBox("Operación correcta.", "Se ha activado el modo espera.")
                 else:
@@ -645,14 +652,14 @@ class VideoClient(object):
         '''
         nick = self.app.getEntry("calleeNickInput")
         self.app.hideSubWindow("Iniciar llamada")
-        if nick == get_username():
+        if nick == self.control.get_username():
             self.app.warningBox("Advertencia", "No puedes llamarte a ti mismo.")
             return
         if nick == None or nick == "":
             self.app.warningBox("Advertencia", "No has introducido usuario.")
             return
         #Para no bloquear la GUI, se llama en un hilo
-        self.app.threadCallback(connect_to,self.call_callback,nick)
+        self.app.threadCallback(self.control.connect_to,self.call_callback,nick)
 
     def call_callback(self,ret):
         '''
@@ -699,7 +706,7 @@ class VideoClient(object):
         Descripcion: Funcion pensada para rellenar la lista de usuarios de forma asincrona.
         '''
         #Poblamos la lista de usuarios con los nombres
-        users = list_users()
+        users = self.discovery.list_users()
         if users == None:
             print("Error obteniendo listado de usuarios.")
             return
@@ -709,9 +716,6 @@ class VideoClient(object):
 #PROGRAMA PRINCIPAL
 
 if __name__ == '__main__':
-
-    #Leemos la configuración del programa
-    read_config()
 
     #Crear objeto GUI
     vc = VideoClient("1280x720")
