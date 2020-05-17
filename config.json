@@ -1,0 +1,17 @@
+{
+	"BUFFER_SIZE": 256, 
+	"BUFFER_THRESHOLD": 10,
+	"FIXED_DELAY_THRESHOLD": 0.15,
+	"FPS_REFRESH": 5.0,
+	"QUALITY_REFRESH": 1.0, 
+	"RESOLUTION_REFRESH" : 10.0,
+
+	"call_timeout": 15,
+	"user_filename": "usuario.json", 
+
+	"server_ip": "vega.ii.uam.es",
+	"server_port": 8000,
+
+	"REPORT_REFRESH": 5.0,
+	"REPORT_WEIGHT": 0.7
+}

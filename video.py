@@ -6,235 +6,313 @@
    @date 23-04-2020
 '''
 
-import socket
+import threading
+import heapq
 import time
 import cv2
 import numpy as np
-import threading
-import heapq
 
-#Variables globales de estado del modulo
-buffer_lock = threading.Lock() #Cerrojo para el buffer en los 2 hilos (recepcion de la red y extraccion para reproducir)
-buffer_num = 0 #Ultimo paquete que se extrajo del buffer. Esto evita que llegue uno posterior a uno ya emitido.
-timemax = -1 #Retardo fijo. No se reproduciran paquetes pasado este retardo fijo desde su emision.
-packets_lost = [0,0,0] #3 contadores de paquetes uno para cada ajuste (calidad,FPS,resolucion) posible.
-time_last_check_qual = -1 #Timestamp con la ultima vez que se intento actualizar la calidad
-time_last_check_fps = -1 #Timestamp con la ultima vez que se intentaron actualizar los FPS
-time_last_check_res = -1 #Timestamp con la ultima vez que se intento actualizar la resolucion
+class VideoBuffer():
+    '''Buffer de video: Encapsula el estado y funcionalidades del buffer de video'''
 
-#Parametros constantes del QoS
-BUFFER_SIZE = 256 #Tamano maximo para el buffer.
-BUFFER_THRESHOLD = 10 #Numero de frames que han tenido que llegar para que se reproduzcan frames
-FIXED_DELAY_THRESHOLD = 0.25 #Milisegundos de margen que se permiten como mucho para el retardo fijo.
-FPS_REFRESH = 5.0 #Cada cuanto se intenta reajustar los fps
-QUALITY_REFRESH = 1.0 #Cada cuanto se intenta reajustar la calidad de compresion
-RESOLUTION_REFRESH = 10.0 #Cada cuanto se intenta reajustar la resolucion del video
+    #Variables globales de estado del modulo
+    buffer_lock = threading.Lock() #Cerrojo para el buffer en los 2 hilos (recepcion de la red y extraccion para reproducir)
+    buffer_heap = [] #Buffer de video (lista de paquetes)
+    buffer_num = 0 #Ultimo paquete que se extrajo del buffer. Esto evita que llegue uno posterior a uno ya emitido.
+    timemax = -1 #Retardo fijo. No se reproduciran paquetes pasado este retardo fijo desde su emision.
+    packets_lost = [0, 0, 0, 0] #4 contadores de paquetes uno para cada ajuste (calidad,FPS,resolucion,reportes salientes) posible.
+    time_last_check_qual = -1 #Timestamp con la ultima vez que se intento actualizar la calidad
+    time_last_check_fps = -1 #Timestamp con la ultima vez que se intentaron actualizar los FPS
+    time_last_check_res = -1 #Timestamp con la ultima vez que se intento actualizar la resolucion
+    buffer_block = True #Indicara al buffer si puede sacar frames o no. Solo lo levantaremos cuando este parcialmente lleno.
 
-#MEDIDAS PARA AJUSTAR QoS. Cada valor es una fraccion de frames. 
-# Por ejemplo, si desde la ultima comprobacion debieron llegar 
-# 10 paquetes, y llegan 6, entonces ha habido una fraccion de 0.4 de perdidas.
-MEDIUM_LOST = 1/15 #Fraccion de frames perdida por segundo que se considera mediocre.
-WORST_LOST = 4/15 #Fraccion de frames perdida por segundo que se considera mala
+    #MEDIDAS PARA AJUSTAR QoS. Cada valor es una fraccion de frames. 
+    # Por ejemplo, si desde la ultima comprobacion debieron llegar
+    # 10 paquetes, y llegan 6, entonces ha habido una fraccion de 0.4 de perdidas.
+    MEDIUM_LOST = 1/15 #Fraccion de frames perdida por segundo que se considera mediocre.
+    WORST_LOST = 4/15 #Fraccion de frames perdida por segundo que se considera mala
 
-def send_frame(socket_video,status,frame,numOrden, quality ,resolution,fps):
-    '''
-    Nombre: send_frame
-    Descripcion: Envia un frame comprimido a la ip/puerto indicados.
-    Argumentos: socket_video: Socket UDP con el que se envia el frame.
-                status: Contiene el ip y el puerto al que se envia el frame.
-                frame: Frame a enviar.
-                numOrden: Número del frame que se envía.
-                quality: Calidad a la que se comprime.
-                resolution: Resolucion del frame.
-                fps: Numero de frames que se envian por segundo.
-    Retorno:
-        En caso de que no haya errores devuelve 0
-        En caso de error devuelve -1.
-    '''
-    encimg = compress(frame,quality)
-    header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + str(fps) + "#"
-    header = header.encode()
-    message = header + encimg
-    lengthTot = len(message)
+    #Variables de V1
+    last_timestamp = 0 #Marca de tiempo del ultimo reporte
+    last_loss_per_second = 0 #Paquetes perdidos por segundo segun el ultimo reporte
+    time_last_sent_report = -1 #Timestamp con la ultima vez que se envio reporte de errores
+    report_lock = threading.Lock() #Cerrojo para manipular las variables de reportes de perdidas
+    using_v1 = False #Indica si se esta usando la version 1, para enviar reportes de perdidas.
+    control = None #Modulo de control
 
-    try:
-        lengthSend = socket_video.sendto(message,status)
-    except:
-        lengthSend = -1
-        print("UDP Error: El frame no entra en el datagrama.")
+    config = None #Objeto de configuracion
 
-    if(lengthSend != lengthTot):
-        return -1
-    return 0
+    def __init__(self, config):
+        '''
+        Nombre: __init__
+        Descripcion: Constructor que ajusta el objeto de configuracion
+        '''
+        self.config = config
+
+    def send_frame(self, socket_video, status, frame, numOrden, quality ,resolution, fps):
+        '''
+        Nombre: send_frame
+        Descripcion: Envia un frame comprimido a la ip/puerto indicados.
+        Argumentos: socket_video: Socket UDP con el que se envia el frame.
+                    status: Contiene el ip y el puerto al que se envia el frame.
+                    frame: Frame a enviar.
+                    numOrden: Número del frame que se envía.
+                    quality: Calidad a la que se comprime.
+                    resolution: Resolucion del frame.
+                    fps: Numero de frames que se envian por segundo.
+        Retorno:
+            En caso de que no haya errores devuelve 0
+            En caso de error devuelve -1.
+        '''
+        encimg = compress(frame, quality)
+        header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + str(fps) + "#"
+        header = header.encode()
+        message = header + encimg
+        lengthTot = len(message)
+
+        try:
+            lengthSend = socket_video.sendto(message, status)
+        except OSError:
+            lengthSend = -1
+            print("UDP Error: El frame no entra en el datagrama.")
+
+        if(lengthSend != lengthTot):
+            return -1
+        return 0
 
 
-def receive_frame(socket_video_rec,buffer_video,buffer_block):
-    '''
-    Nombre: receive_frame
-    Descripcion: Funcion que va recibiendo frames, descomprimiendolos e incluyendolos en un
-                heap.
-    Argumentos: socket_video_rec: Socket UDP con el que se recibe el frame.
-                buffer_video: Heap que guarda los frames.
-                buffer_block: Semáforo para acceder al heap.
-    Retorno:
-        None
-    '''
-    global buffer_num, packets_lost, time_last_check_qual, time_last_check_fps, timemax, time_last_check_res
+    def receive_frame(self, socket_video_rec):
+        '''
+        Nombre: receive_frame
+        Descripcion: Funcion que va recibiendo frames, descomprimiendolos e incluyendolos en un
+                    heap.
+        Argumentos: socket_video_rec: Socket UDP con el que se recibe el frame.
+        Retorno:
+            None
+        '''
+        #Inicializar las variables de control del modulo de video.
+        self.buffer_num = -1
+        self.timemax = -1
+        self.packets_lost = [0, 0, 0, 0]
+        self.time_last_check_qual = time.time()
+        self.time_last_check_fps = time.time()
+        self.time_last_check_res = time.time()
+        self.time_last_sent_report = time.time()
+        self.last_timestamp = 0
 
-    #Inicializar las variables de control del modulo de video.
-    buffer_num = -1
-    timemax = -1
-    packets_lost = [0,0,0]
-    time_last_check_qual = time.time()
-    time_last_check_fps = time.time()
-    time_last_check_res = time.time()
-
-    #Vaciar el socket. Podrian quedar restos de llamadas previas, 
-    #cuyos numeros de secuencia lian al contador de paquetes perdidos.
-    socket_video_rec.setblocking(0)
-    try:
-        while socket_video_rec.recvfrom(65535):
+        #Vaciar el socket. Podrian quedar restos de llamadas previas, 
+        #cuyos numeros de secuencia lian al contador de paquetes perdidos.
+        socket_video_rec.setblocking(0)
+        try:
+            while socket_video_rec.recvfrom(65535):
+                pass
+        except OSError:
+            #No queda nada que vaciar
             pass
-    except:
-        #No queda nada que vaciar
-        pass
-    socket_video_rec.setblocking(1)
+        socket_video_rec.setblocking(1)
 
-    while True:
-        data, _ = socket_video_rec.recvfrom(65535)
+        while True:
+            data, _ = socket_video_rec.recvfrom(65535)
 
-        if(data == b'END_RECEPTION'):
-            return
+            if(data == b'END_RECEPTION'):
+                return
 
-        with buffer_lock:
-            video_length = len(buffer_video)
+            with self.buffer_lock:
+                video_length = len(self.buffer_heap)
 
-        if(data != None and video_length < BUFFER_SIZE):
-            header,decimg = decompress(data)
-            timestamp = float(header[1])
-            incoming_fps = int(header[3])
+            if(data != None and video_length < self.config.BUFFER_SIZE):
+                header,decimg = decompress(data)
+                timestamp = float(header[1])
+                incoming_fps = int(header[3])
 
-            #Calculo del retardo fijo maximo
-            if(timemax == -1):
-                #Retardo de red
-                network_delay_estimate = time.time() - timestamp
-                #Retardo que tendra lugar a causa de la espera inicial del buffer
-                buffer_threshold_delay_estimate = BUFFER_THRESHOLD/incoming_fps
-                #Tiempo maximo de retardo que permitiremos
-                timemax = network_delay_estimate + buffer_threshold_delay_estimate + FIXED_DELAY_THRESHOLD
+                #Calculo del retardo fijo maximo
+                if(self.timemax == -1):
+                    #Retardo de red
+                    network_delay_estimate = time.time() - timestamp
+                    #Retardo que tendra lugar a causa de la espera inicial del buffer
+                    buffer_threshold_delay_estimate = self.config.BUFFER_THRESHOLD/incoming_fps
+                    #Tiempo maximo de retardo que permitiremos
+                    self.timemax = network_delay_estimate + buffer_threshold_delay_estimate + self.config.FIXED_DELAY_THRESHOLD
 
-            #Eliminamos los elementos anteriores al ultimo extraido
-            with buffer_lock:
-                if((buffer_num < int(header[0]))):
-                    heapq.heappush(buffer_video,(int(header[0]),header,decimg))
-                #Levantamos el buffer cuando haya un poco de cantidad
-                if(len(buffer_video) > BUFFER_THRESHOLD):
-                    buffer_block[0] = False
+                #Eliminamos los elementos anteriores al ultimo extraido
+                with self.buffer_lock:
+                    if((self.buffer_num < int(header[0]))):
+                        heapq.heappush(self.buffer_heap, (int(header[0]), header, decimg))
+                    #Levantamos el buffer cuando haya un poco de cantidad
+                    if(len(self.buffer_heap) > self.config.BUFFER_THRESHOLD):
+                        self.buffer_block = False
 
-def pop_frame(buffer, block, quality, fps, resolution, packets_lost_total, min_fps=20, max_fps=40):
-    '''
-    Nombre: pop_frame
-    Descripcion: Extrae un elemento del buffer. Cada elemento es una tripla que
-                 contiene el numero de frame, el header y el frame. Ajusta
-                 la calidad del video dependiendo de los frames perdidos.
-                heap.
-    Argumentos: buffer: Heap del que se extrae la tripla.
-                block: Indica si está bloqueada la extraccion de frames.
-                min_fps : Valor minimo de fps que el QoS puede ajustar.
-                max_fps : Valor maximo de fps que el QoS puede ajustar.
+    def pop_frame(self, quality, fps, resolution, packets_lost_total, min_fps=20, max_fps=40):
+        '''
+        Nombre: pop_frame
+        Descripcion: Extrae un elemento del buffer. Cada elemento es una tripla que
+                    contiene el numero de frame, el header y el frame. Ajusta
+                    la calidad del video dependiendo de los frames perdidos.
+                    heap.
+        Argumentos: min_fps : Valor minimo de fps que el QoS puede ajustar.
+                    max_fps : Valor maximo de fps que el QoS puede ajustar.
 
-                Datos que actualiza la funcion (deben pasarse por referencia, envueltos en una lista):
-                quality: Calidad con la que se están comprimiendo los frames
-                fps: Frames que se envian al segundos
-                resolution: Resolucion a la que se captura la imagen
-                packets_lost_total: Numero total de paquetes perdidos esta llamada
-    Retorno:
-        - Si hay elementos: se devuelven 3 elementos. El primero es el numero
-        de frame, el segundo elemento es el header y el último el propio frame descomprimido.
-        - Si el buffer esta bloqueado se devuelven 3 elementos: -1, una lista vacia
-        y un numpy array vacio.
-    '''
-    global buffer_num, packets_lost, time_last_check_qual, time_last_check_fps, time_last_check_res
-    #El buffer debe estar desbloqueado, es decir, deben haber llegado suficientes elementos para poder ir extrayendo.
-    if(not block[0]):
-        with buffer_lock:
+                    Datos que actualiza la funcion (deben pasarse por referencia, envueltos en una lista):
+                    quality: Calidad con la que se están comprimiendo los frames
+                    fps: Frames que se envian al segundos
+                    resolution: Resolucion a la que se captura la imagen
+                    self.packets_lost_total: Numero total de paquetes perdidos esta llamada
+        Retorno:
+            - Si hay elementos: se devuelven 3 elementos. El primero es el numero
+            de frame, el segundo elemento es el header y el último el propio frame descomprimido.
+            - Si el buffer esta bloqueado se devuelven 3 elementos: -1, una lista vacia
+            y un numpy array vacio.
+        '''
+        #El buffer debe estar desbloqueado, es decir, deben haber llegado suficientes elementos para poder ir extrayendo.
+        if(not self.buffer_block):
+            with self.buffer_lock:
 
-            #Almacenamos el instante actual
-            time_epoch = time.time()
+                #Almacenamos el instante actual
+                time_epoch = time.time()
 
-            #Guardamos los fps a los que se envio el frame que vamos a leer
-            #buffer[0] -> paquete actual
-            #campo 1 -> Header
-            #campo 3 del header -> FPS
-            fps_entrante = int(buffer[0][1][3])
+                #Guardamos los fps a los que se envio el frame que vamos a leer
+                #buffer[0] -> paquete actual
+                #campo 1 -> Header
+                #campo 3 del header -> FPS
+                fps_entrante = int(self.buffer_heap[0][1][3])
+                if fps_entrante <= 0:
+                    fps_entrante = 1
 
-            #Si el paquete que toca sacar esta muy retrasado, lo descartamos y sacamos otro
-            #buffer[0] -> paquete que toca sacar
-            #campo 1 -> Header
-            #campo 1 del header -> timestamp
-            #Si solo queda un paquete no lo hacemos dado que no hay mas remedio que usar ese
-            while len(buffer) > 1 and (time_epoch - float(buffer[0][1][1]) > timemax):
-                heapq.heappop(buffer) #Extraccion del paquete descartado
+                #Si el paquete que toca sacar esta muy retrasado, lo descartamos y sacamos otro
+                #buffer[0] -> paquete que toca sacar
+                #campo 1 -> Header
+                #campo 1 del header -> timestamp
+                #Si solo queda un paquete no lo hacemos dado que no hay mas remedio que usar ese
+                while len(self.buffer_heap) > 1 and (time_epoch - float(self.buffer_heap[0][1][1]) > self.timemax):
+                    heapq.heappop(self.buffer_heap) #Extraccion del paquete descartado
 
-            #Añadimos el numero de paquetes perdidos
-            if(buffer_num != -1 ):
-                #Paquetes perdidos desde el ultimo que se saco (buffer_num)
-                packets_lost_now = buffer[0][0] - buffer_num -1
-                if(packets_lost_now < 0):
-                    packets_lost_now = 0
-                #Se agregan a los 3 contadores (uno para cada parametro de calidad)
-                packets_lost[0] += packets_lost_now
-                packets_lost[1] += packets_lost_now
-                packets_lost[2] += packets_lost_now
-                #Se agregan al conteo total
-                packets_lost_total[0] += packets_lost_now
+                #Añadimos el numero de paquetes perdidos
+                if(self.buffer_num != -1 ):
+                    #Paquetes perdidos desde el ultimo que se saco (self.buffer_num)
+                    packets_lost_now = self.buffer_heap[0][0] - self.buffer_num -1
+                    if(packets_lost_now < 0):
+                        packets_lost_now = 0
+                    #Se agregan a los 3 contadores (uno para cada parametro de calidad)
+                    self.packets_lost[0] += packets_lost_now
+                    self.packets_lost[1] += packets_lost_now
+                    self.packets_lost[2] += packets_lost_now
+                    self.packets_lost[3] += packets_lost_now
+                    #Se agregan al conteo total
+                    packets_lost_total[0] += packets_lost_now
 
-            #Ajustamos la calidad de compresión cada QUALITY_REFRESH
-            if(time_epoch - time_last_check_qual > QUALITY_REFRESH):
-                if(packets_lost[0] < MEDIUM_LOST * QUALITY_REFRESH * fps_entrante):
-                    quality[0] = 75
-                elif(packets_lost[0] < WORST_LOST * QUALITY_REFRESH * fps_entrante):
-                    quality[0] = 50
-                else:
-                    quality[0] = 25
-                packets_lost[0] = 0
-                time_last_check_qual = time_epoch
+                #V1: Calculamos fraccion de perdidas segun reporte
+                report_fraction = self.last_loss_per_second / fps[0]
+                weigth = self.config.REPORT_WEIGHT
 
-            #Ajustamos los fps cada FPS_REFRESH
-            if(time_epoch - time_last_check_fps > FPS_REFRESH):
-                if(packets_lost[1] < MEDIUM_LOST * FPS_REFRESH * fps_entrante):
-                    fps[0] = max_fps
-                elif(packets_lost[1] < WORST_LOST * FPS_REFRESH * fps_entrante):
-                    fps[0] = (max_fps + min_fps) // 2
-                else:
-                    fps[0] = min_fps
-                packets_lost[1] = 0
-                time_last_check_fps = time_epoch
+                #Ajustamos la calidad de compresión cada QUALITY_REFRESH
+                if(time_epoch - self.time_last_check_qual > self.config.QUALITY_REFRESH):
 
-            #Ajustamos la resolucion cada RESOLUTION_REFRESH
-            if(time_epoch - time_last_check_res > RESOLUTION_REFRESH):
-                if(packets_lost[2] < MEDIUM_LOST * RESOLUTION_REFRESH * fps_entrante):
-                    resolution[0] = "640x480"
-                elif(packets_lost[2] < WORST_LOST * RESOLUTION_REFRESH * fps_entrante):
-                    resolution[0] = "320x240"
-                else:
-                    resolution[0] = "160x120"
-                packets_lost[2] = 0
+                    quality_fraction = self.packets_lost[0]/(self.config.QUALITY_REFRESH * fps_entrante)
+                    if(report_fraction != 0):
+                        quality_fraction = quality_fraction * (1-weigth) + report_fraction * weigth
 
-                time_last_check_res = time_epoch
+                    if(quality_fraction < self.MEDIUM_LOST):
+                        quality[0] = 75
+                    elif(quality_fraction < self.WORST_LOST):
+                        quality[0] = 50
+                    else:
+                        quality[0] = 25
 
-            #Actualizamos el buffer num al numero del header del primer elemento
-            buffer_num = buffer[0][0]
+                    self.packets_lost[0] = 0
+                    self.time_last_check_qual = time_epoch
 
-            #Evitamos vaciado completo en caso de que no se este recibiendo a suficiente ritmo
-            if len(buffer) == 1:
-                return buffer[0]
+                #Ajustamos los fps cada FPS_REFRESH
+                if(time_epoch - self.time_last_check_fps > self.config.FPS_REFRESH):
 
-            return heapq.heappop(buffer)
+                    fps_fraction = self.packets_lost[1]/(self.config.FPS_REFRESH * fps_entrante)
+                    if(report_fraction != 0):
+                        fps_fraction = fps_fraction * (1-weigth) + report_fraction * weigth
 
-    else:
-        return -1, list(), np.array([])
+                    if(fps_fraction < self.MEDIUM_LOST):
+                        fps[0] = max_fps
+                    elif(fps_fraction < self.WORST_LOST):
+                        fps[0] = (max_fps + min_fps) // 2
+                    else:
+                        fps[0] = min_fps
 
+                    self.packets_lost[1] = 0
+                    self.time_last_check_fps = time_epoch
+
+                #Ajustamos la resolucion cada RESOLUTION_REFRESH
+                if(time_epoch - self.time_last_check_res > self.config.RESOLUTION_REFRESH):
+
+                    resolution_fraction = self.packets_lost[2]/(self.config.RESOLUTION_REFRESH * fps_entrante)
+                    if(report_fraction != 0):
+                        resolution_fraction = resolution_fraction * (1-weigth) + report_fraction * weigth
+
+                    if(resolution_fraction < self.MEDIUM_LOST):
+                        resolution[0] = "640x480"
+                    elif(resolution_fraction < self.WORST_LOST):
+                        resolution[0] = "320x240"
+                    else:
+                        resolution[0] = "160x120"
+
+                    self.packets_lost[2] = 0
+                    self.time_last_check_res = time_epoch
+
+                #Mandar reportes de perdidas a los que usen V1
+                if(self.using_v1):
+                    if(time_epoch - self.time_last_sent_report > self.config.REPORT_REFRESH):
+                        self.control.send_loss_report(self.packets_lost[3])
+                        self.packets_lost[3] = 0
+                        self.time_last_sent_report = time_epoch
+
+                #Actualizamos el buffer num al numero del header del primer elemento
+                self.buffer_num = self.buffer_heap[0][0]
+
+                #Evitamos vaciado completo en caso de que no se este recibiendo a suficiente ritmo
+                if len(self.buffer_heap) == 1:
+                    return self.buffer_heap[0]
+
+                return heapq.heappop(self.buffer_heap)
+
+        else:
+            return -1, list(), np.array([])
+
+    def set_loss_report(self, lost, timestamp):
+        '''
+        Nombre: set_lost_report
+        Descripcion: Ajusta los datos de perdidas del otro extremo.
+        Argumentos:
+            lost: paquetes perdidos segun el reporte
+            timestamp: Marca de tiempo del reporte
+        '''
+        with self.report_lock:
+            #La primera vez simplemente cogeremos el timestamp.
+            if(self.last_timestamp != 0):
+                self.last_loss_per_second = lost/(timestamp-self.last_timestamp)
+            self.last_timestamp = timestamp
+
+    def set_control(self, control):
+        '''
+        Nombre: set_control
+        Descripcion: Ajusta el modulo de control.
+        Argumentos:
+            control: Objeto con modulo de control.
+        '''
+        self.control = control
+
+    def set_using_v1(self):
+        '''
+        Nombre: set_using_v1
+        Descripcion: Indica al modulo de video que el otro cliente usa v1
+        '''
+        self.using_v1 = True
+
+    def empty_buffer(self):
+        '''
+        Nombre: empty_buffer
+        Descripcion: Vacia el buffer.
+        '''
+        self.buffer_heap = []
+        self.buffer_block = True
+        self.last_loss_per_second = 0
+        self.using_v1 = False
 
 def compress(frame,quality):
     '''
