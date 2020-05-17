@@ -6,30 +6,39 @@
    @date 23-04-2020
 '''
 
-import socket
+import threading
+import heapq
 import time
 import cv2
 import numpy as np
-import threading
-import heapq
 
 class VideoBuffer():
+    '''Buffer de video: Encapsula el estado y funcionalidades del buffer de video'''
+
     #Variables globales de estado del modulo
     buffer_lock = threading.Lock() #Cerrojo para el buffer en los 2 hilos (recepcion de la red y extraccion para reproducir)
     buffer_heap = [] #Buffer de video (lista de paquetes)
     buffer_num = 0 #Ultimo paquete que se extrajo del buffer. Esto evita que llegue uno posterior a uno ya emitido.
     timemax = -1 #Retardo fijo. No se reproduciran paquetes pasado este retardo fijo desde su emision.
-    packets_lost = [0,0,0] #3 contadores de paquetes uno para cada ajuste (calidad,FPS,resolucion) posible.
+    packets_lost = [0, 0, 0, 0] #4 contadores de paquetes uno para cada ajuste (calidad,FPS,resolucion,reportes salientes) posible.
     time_last_check_qual = -1 #Timestamp con la ultima vez que se intento actualizar la calidad
     time_last_check_fps = -1 #Timestamp con la ultima vez que se intentaron actualizar los FPS
     time_last_check_res = -1 #Timestamp con la ultima vez que se intento actualizar la resolucion
     buffer_block = True #Indicara al buffer si puede sacar frames o no. Solo lo levantaremos cuando este parcialmente lleno.
 
     #MEDIDAS PARA AJUSTAR QoS. Cada valor es una fraccion de frames. 
-    # Por ejemplo, si desde la ultima comprobacion debieron llegar 
+    # Por ejemplo, si desde la ultima comprobacion debieron llegar
     # 10 paquetes, y llegan 6, entonces ha habido una fraccion de 0.4 de perdidas.
     MEDIUM_LOST = 1/15 #Fraccion de frames perdida por segundo que se considera mediocre.
     WORST_LOST = 4/15 #Fraccion de frames perdida por segundo que se considera mala
+
+    #Variables de V1
+    last_timestamp = 0 #Marca de tiempo del ultimo reporte
+    last_loss_per_second = 0 #Paquetes perdidos por segundo segun el ultimo reporte
+    time_last_sent_report = -1 #Timestamp con la ultima vez que se envio reporte de errores
+    report_lock = threading.Lock() #Cerrojo para manipular las variables de reportes de perdidas
+    using_v1 = False #Indica si se esta usando la version 1, para enviar reportes de perdidas.
+    control = None #Modulo de control
 
     config = None #Objeto de configuracion
 
@@ -40,7 +49,7 @@ class VideoBuffer():
         '''
         self.config = config
 
-    def send_frame(self,socket_video,status,frame,numOrden, quality ,resolution,fps):
+    def send_frame(self, socket_video, status, frame, numOrden, quality ,resolution, fps):
         '''
         Nombre: send_frame
         Descripcion: Envia un frame comprimido a la ip/puerto indicados.
@@ -55,15 +64,15 @@ class VideoBuffer():
             En caso de que no haya errores devuelve 0
             En caso de error devuelve -1.
         '''
-        encimg = compress(frame,quality)
+        encimg = compress(frame, quality)
         header = str(numOrden) + "#" + str(time.time()) + "#" + resolution + "#" + str(fps) + "#"
         header = header.encode()
         message = header + encimg
         lengthTot = len(message)
 
         try:
-            lengthSend = socket_video.sendto(message,status)
-        except:
+            lengthSend = socket_video.sendto(message, status)
+        except OSError:
             lengthSend = -1
             print("UDP Error: El frame no entra en el datagrama.")
 
@@ -72,7 +81,7 @@ class VideoBuffer():
         return 0
 
 
-    def receive_frame(self,socket_video_rec):
+    def receive_frame(self, socket_video_rec):
         '''
         Nombre: receive_frame
         Descripcion: Funcion que va recibiendo frames, descomprimiendolos e incluyendolos en un
@@ -84,10 +93,12 @@ class VideoBuffer():
         #Inicializar las variables de control del modulo de video.
         self.buffer_num = -1
         self.timemax = -1
-        self.packets_lost = [0,0,0]
+        self.packets_lost = [0, 0, 0, 0]
         self.time_last_check_qual = time.time()
         self.time_last_check_fps = time.time()
         self.time_last_check_res = time.time()
+        self.time_last_sent_report = time.time()
+        self.last_timestamp = time.time()
 
         #Vaciar el socket. Podrian quedar restos de llamadas previas, 
         #cuyos numeros de secuencia lian al contador de paquetes perdidos.
@@ -95,7 +106,7 @@ class VideoBuffer():
         try:
             while socket_video_rec.recvfrom(65535):
                 pass
-        except:
+        except OSError:
             #No queda nada que vaciar
             pass
         socket_video_rec.setblocking(1)
@@ -126,7 +137,7 @@ class VideoBuffer():
                 #Eliminamos los elementos anteriores al ultimo extraido
                 with self.buffer_lock:
                     if((self.buffer_num < int(header[0]))):
-                        heapq.heappush(self.buffer_heap,(int(header[0]),header,decimg))
+                        heapq.heappush(self.buffer_heap, (int(header[0]), header, decimg))
                     #Levantamos el buffer cuando haya un poco de cantidad
                     if(len(self.buffer_heap) > self.config.BUFFER_THRESHOLD):
                         self.buffer_block = False
@@ -164,6 +175,8 @@ class VideoBuffer():
                 #campo 1 -> Header
                 #campo 3 del header -> FPS
                 fps_entrante = int(self.buffer_heap[0][1][3])
+                if fps_entrante <= 0:
+                    fps_entrante = 1
 
                 #Si el paquete que toca sacar esta muy retrasado, lo descartamos y sacamos otro
                 #buffer[0] -> paquete que toca sacar
@@ -176,49 +189,78 @@ class VideoBuffer():
                 #Añadimos el numero de paquetes perdidos
                 if(self.buffer_num != -1 ):
                     #Paquetes perdidos desde el ultimo que se saco (self.buffer_num)
-                    self.packets_lost_now = self.buffer_heap[0][0] - self.buffer_num -1
-                    if(self.packets_lost_now < 0):
-                        self.packets_lost_now = 0
+                    packets_lost_now = self.buffer_heap[0][0] - self.buffer_num -1
+                    if(packets_lost_now < 0):
+                        packets_lost_now = 0
                     #Se agregan a los 3 contadores (uno para cada parametro de calidad)
-                    self.packets_lost[0] += self.packets_lost_now
-                    self.packets_lost[1] += self.packets_lost_now
-                    self.packets_lost[2] += self.packets_lost_now
+                    self.packets_lost[0] += packets_lost_now
+                    self.packets_lost[1] += packets_lost_now
+                    self.packets_lost[2] += packets_lost_now
+                    self.packets_lost[3] += packets_lost_now
                     #Se agregan al conteo total
-                    packets_lost_total[0] += self.packets_lost_now
+                    packets_lost_total[0] += packets_lost_now
+
+                #V1: Calculamos fraccion de perdidas segun reporte
+                report_fraction = self.last_loss_per_second / fps[0]
+                weigth = self.config.REPORT_WEIGHT
 
                 #Ajustamos la calidad de compresión cada QUALITY_REFRESH
                 if(time_epoch - self.time_last_check_qual > self.config.QUALITY_REFRESH):
-                    if(self.packets_lost[0] < self.MEDIUM_LOST * self.config.QUALITY_REFRESH * fps_entrante):
+
+                    quality_fraction = self.packets_lost[0]/(self.config.QUALITY_REFRESH * fps_entrante)
+                    if(report_fraction != 0):
+                        quality_fraction = quality_fraction * (1-weigth) + report_fraction * weigth
+
+                    if(quality_fraction < self.MEDIUM_LOST):
                         quality[0] = 75
-                    elif(self.packets_lost[0] < self.WORST_LOST * self.config.QUALITY_REFRESH * fps_entrante):
+                    elif(quality_fraction < self.WORST_LOST):
                         quality[0] = 50
                     else:
                         quality[0] = 25
+
                     self.packets_lost[0] = 0
                     self.time_last_check_qual = time_epoch
 
                 #Ajustamos los fps cada FPS_REFRESH
                 if(time_epoch - self.time_last_check_fps > self.config.FPS_REFRESH):
-                    if(self.packets_lost[1] < self.MEDIUM_LOST * self.config.FPS_REFRESH * fps_entrante):
+
+                    fps_fraction = self.packets_lost[1]/(self.config.FPS_REFRESH * fps_entrante)
+                    if(report_fraction != 0):
+                        fps_fraction = fps_fraction * (1-weigth) + report_fraction * weigth
+
+                    if(fps_fraction < self.MEDIUM_LOST):
                         fps[0] = max_fps
-                    elif(self.packets_lost[1] < self.WORST_LOST * self.config.FPS_REFRESH * fps_entrante):
+                    elif(fps_fraction < self.WORST_LOST):
                         fps[0] = (max_fps + min_fps) // 2
                     else:
                         fps[0] = min_fps
+
                     self.packets_lost[1] = 0
                     self.time_last_check_fps = time_epoch
 
                 #Ajustamos la resolucion cada RESOLUTION_REFRESH
                 if(time_epoch - self.time_last_check_res > self.config.RESOLUTION_REFRESH):
-                    if(self.packets_lost[2] < self.MEDIUM_LOST * self.config.RESOLUTION_REFRESH * fps_entrante):
+
+                    resolution_fraction = self.packets_lost[2]/(self.config.RESOLUTION_REFRESH * fps_entrante)
+                    if(report_fraction != 0):
+                        resolution_fraction = resolution_fraction * (1-weigth) + report_fraction * weigth
+
+                    if(resolution_fraction < self.MEDIUM_LOST):
                         resolution[0] = "640x480"
-                    elif(self.packets_lost[2] < self.WORST_LOST * self.config.RESOLUTION_REFRESH * fps_entrante):
+                    elif(resolution_fraction < self.WORST_LOST):
                         resolution[0] = "320x240"
                     else:
                         resolution[0] = "160x120"
-                    self.packets_lost[2] = 0
 
+                    self.packets_lost[2] = 0
                     self.time_last_check_res = time_epoch
+
+                #Mandar reportes de perdidas a los que usen V1
+                if(self.using_v1):
+                    if(time_epoch - self.time_last_sent_report > self.config.REPORT_REFRESH):
+                        self.control.send_loss_report(self.packets_lost[3])
+                        self.packets_lost[3] = 0
+                        self.time_last_sent_report = time_epoch
 
                 #Actualizamos el buffer num al numero del header del primer elemento
                 self.buffer_num = self.buffer_heap[0][0]
@@ -232,6 +274,34 @@ class VideoBuffer():
         else:
             return -1, list(), np.array([])
 
+    def set_loss_report(self, lost, timestamp):
+        '''
+        Nombre: set_lost_report
+        Descripcion: Ajusta los datos de perdidas del otro extremo.
+        Argumentos:
+            lost: paquetes perdidos segun el reporte
+            timestamp: Marca de tiempo del reporte
+        '''
+        with self.report_lock:
+            self.last_loss_per_second = lost/(time.time()-self.last_timestamp)
+            self.last_timestamp = timestamp
+
+    def set_control(self, control):
+        '''
+        Nombre: set_control
+        Descripcion: Ajusta el modulo de control.
+        Argumentos:
+            control: Objeto con modulo de control.
+        '''
+        self.control = control
+
+    def set_using_v1(self):
+        '''
+        Nombre: set_using_v1
+        Descripcion: Indica al modulo de video que el otro cliente usa v1
+        '''
+        self.using_v1 = True
+
     def empty_buffer(self):
         '''
         Nombre: empty_buffer
@@ -239,6 +309,8 @@ class VideoBuffer():
         '''
         self.buffer_heap = []
         self.buffer_block = True
+        self.last_loss_per_second = 0
+        self.using_v1 = False
 
 def compress(frame,quality):
     '''

@@ -9,13 +9,14 @@
 import socket
 
 class Discovery():
+    '''Clase de descubrimiento: mantiene el estado y las funcionalidades del modulo de descubrimiento'''
 
     socket_timeout = 3 #Timeout para la conexion
     server_socket = None #Socket del servidor.
     server_ip = "vega.ii.uam.es" #Parametro con la IP
     server_port = 8000 #Parametro con el puerto
 
-    def __init__(self,server_ip,server_port):
+    def __init__(self, server_ip, server_port):
         '''
             Nombre: __init__
             Descripcion: Inicializa la conexion con el servidor
@@ -62,7 +63,7 @@ class Discovery():
         self.server_socket = None
         return 0
 
-    def register_user(self,nickname, password, ip, port, protocols=["V0"]):
+    def register_user(self, nickname, password, ip, port, protocols):
         '''
             Nombre: register_user
             Descripcion: Registra un usuario en el sistema.

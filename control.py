@@ -5,9 +5,7 @@
     @author Miguel Gonzalez, Alejandro Bravo.
     @version 1.0
     @date 22-04-2020
-'''
 
-'''
     DESCRIPCION GENERAL DEL MODULO
     El modulo hace uso de semaforos en sus funciones. Por ello es importante hacer las cosas en orden.
 
@@ -21,10 +19,12 @@
 '''
 
 import socket
+import time
 import threading
 import json
 
 class Control():
+    '''Clase de control: Objeto que encapsula el estado y la funcionalidad del modulo de control'''
 
     # Parametros
     socket_timeout = 2 #Timeout para receive en casos criticos.
@@ -33,7 +33,7 @@ class Control():
 
     control_socket = None #Socket de control.
     connected_to = None #Nombre del usuario al que esta conectado.
-    on_call_with = [None,None] #IP y puerto (como cadena) para transferencia de video. Si alguno es None, no esta en llamada.
+    on_call_with = [None, None] #IP y puerto (como cadena) para transferencia de video. Si alguno es None, no esta en llamada.
     on_hold = False #Indica si se ha puesto la llamada en espera
     call_held = False #Indica si la otra parte ha puesto la llamada en espera.
     listen_end = False #Indica al hilo que escucha que debe parar.
@@ -46,18 +46,21 @@ class Control():
     discovery = None #Objeto de descubrimiento
     call_timeout = 15 #Timeout para responder a la llamada
     user_filename = "usuario.json" #Fichero de usuario
+    video_buffer = None #Buffer del modulo de video
 
-    def __init__(self, discovery, call_timeout, user_filename):
+    def __init__(self, discovery, call_timeout, user_filename, video_buffer):
         '''
             Nombre: __init__
             Descripcion: Inicializa los parametros deseados.
             Argumentos: discovery: modulo de descubrimiento.
                         call_timeout: Segundos de espera si el otro no coge la llamada
                         user_filename: Nombre del fichero de configuracion de usuario
+                        video_buffer: Buffer del modulo de video.
         '''
         self.discovery = discovery
         self.call_timeout = call_timeout
         self.user_filename = user_filename
+        self.video_buffer = video_buffer
 
     # INFORMACION
     def get_username(self):
@@ -73,7 +76,7 @@ class Control():
             try:
                 with open(self.user_filename, "r") as file:
                     data = json.load(file)
-            except:
+            except (FileNotFoundError, json.JSONDecodeError):
                 print("Error abriendo fichero de usuario.")
                 self.control_disconnect() #Desconectamos del usuario actual.
                 return "Error"
@@ -93,7 +96,7 @@ class Control():
             try:
                 with open(self.user_filename, "r") as file:
                     data = json.load(file)
-            except:
+            except (FileNotFoundError, json.JSONDecodeError):
                 print("Error abriendo fichero de usuario.")
                 self.control_disconnect() #Desconectamos del usuario actual.
                 return "Error"
@@ -114,7 +117,7 @@ class Control():
 
     # CONTROL SALIENTE
 
-    def connect_to(self,username):
+    def connect_to(self, username):
         '''
             Nombre: connect_to
             Descripcion: Inicializa la conexion de control con un usuario y lo llama.
@@ -130,16 +133,16 @@ class Control():
         with self.global_lock:
             connected_to_read = self.connected_to
 
-        if connected_to_read != None:
+        if connected_to_read is not None:
             print("Error conectandose al usuario indicado. Ya esta conectado al usuario: " + connected_to_read)
             return -1
 
         #Obtenemos la IP y el puerto.
         ret = self.discovery.query_user(username)
-        if ret == None:
+        if ret is None:
             print("Error conectandose al usuario indicado. El servidor reporta que no existe.")
             return -1
-        if self.connect_to_addr(ret[0],ret[1]) == -1:
+        if self.connect_to_addr(ret[0], ret[1]) == -1:
             return -1
 
         #Ajuste de parametros
@@ -148,9 +151,11 @@ class Control():
             self.on_hold = False #Reinicia la espera de la llamada.
             self.call_held = False
             self.on_call_with = [ret[0], None] #Vamos ajustando la IP de video
+            if "V1" in ret[2]:
+                self.video_buffer.set_using_v1()
         return self.call(int(self.get_video_port())) #Se efectua la llamada
 
-    def connect_to_addr(self,ip, port):
+    def connect_to_addr(self, ip, port):
         '''
             Nombre: connect_to_addr
             Descripcion: Inicializa la conexion de control con un usuario.
@@ -164,20 +169,20 @@ class Control():
             #Ademas esto se ejecuta puntualmente (cuando el usuario llama), asi que no
             #interfiere en exceso con los hilos en bucle.
 
-            if(self.control_socket != None):
+            if self.control_socket is not None:
                 print("Ya hay una conexion de control establecida. Debe cerrarse primero.")
                 return -1
 
             self.control_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            if self.control_socket == None:
+            if self.control_socket is None:
                 return -1
 
             print("Conectandose al usuario con ip " + ip + " y puerto " + port)
             try:
                 self.control_socket.settimeout(self.socket_timeout)
-                self.control_socket.connect((ip,int(port)))
+                self.control_socket.connect((ip, int(port)))
                 self.control_socket.settimeout(None)
-            except:
+            except socket.timeout:
                 print ("No ha sido posible conectarse al usuario. El usuario no ha aceptado la conexion en el tiempo establecido.")
                 self.control_socket.close()
                 self.control_socket = None
@@ -214,7 +219,7 @@ class Control():
         self.connection_barrier.acquire() #Bajamos el semaforo de conexion
         return 0
 
-    def call(self,dstport):
+    def call(self, dstport):
         '''
             Nombre: call
             Descripcion: Llama a un usuario por la conexion de control ya abierta.
@@ -244,7 +249,7 @@ class Control():
             control_socket_read.settimeout(self.call_timeout)
             result = control_socket_read.recv(1024)
             control_socket_read.settimeout(None)
-        except:
+        except socket.timeout:
             print("Error iniciando llamada: el otro lado no ha respondido. Cerrando conexion...")
             self.connection_barrier.release() #Para que pueda hacerse la desconexion
             self.control_disconnect()
@@ -358,6 +363,31 @@ class Control():
             self.on_call_with[1] = None
         return 0
 
+    def send_loss_report(self, lost):
+        '''
+            Nombre: send_loss_report
+            Descripcion: Envia un reporte de perdidas por la red.
+            Retorno:
+                0 si todo es correcto, -1 en caso de error.
+        '''
+
+        with self.global_lock:
+            #Zona protegida porque opera con el estado y los sockets.
+
+            #Si no hay conexiones, error.
+            if self.control_socket is None or self.connected_to is None:
+                print("Error enviando reporte: no esta conectado con ningun usuario.")
+                return -1
+
+            if self.on_call_with[0] is None or self.on_call_with[1] is None:
+                print("Error enviando reporte: no esta en llamada.")
+                return -1
+
+            mensaje = "LOSS_REPORT " + str(lost) + " " + str(time.time())
+            self.control_socket.send(mensaje.encode())
+            print("Enviado reporte: " + mensaje)
+        return 0
+
     def call_status(self):
         '''
             Nombre: call_status
@@ -406,7 +436,7 @@ class Control():
             if(self.control_socket != None):
                 try:
                     msg = self.control_socket.recv(1024) #Recibimos mensaje
-                except:
+                except OSError:
                     self.connection_barrier.release()
                     self.control_disconnect()
                     print("Cerrando conexion de control (procesado de mensajes) actual ante el cierre por la parte contraria.")
@@ -450,6 +480,9 @@ class Control():
                 #Quitar espera
                 with self.global_lock:
                     self.call_held = False
+            elif(words[0] == "LOSS_REPORT" and len(words) >= 3):
+                print("Reporte de perdidas recibido: " + words[1] + " perdidas, timestamp: " + words[2])
+                self.video_buffer.set_loss_report(int(words[1]), float(words[2]))
             elif(words[0] == "CALL_END"):
                 will_end = True
 
@@ -512,9 +545,9 @@ class Control():
 
             #Aceptar conexion
             try:
-                connection, addr= socket_escucha.accept()
+                connection, addr = socket_escucha.accept()
             #Esto es para salir cuando acabe el programa. El accept saldra y entrara aqui.
-            except:
+            except OSError:
                 with self.global_lock:
                     listen_end_read = self.listen_end
                 continue
@@ -574,12 +607,23 @@ class Control():
                     listen_end_read = self.listen_end
                 continue
 
+            #Obtenemos que version esta usando la otra parte:
+            ret = self.discovery.query_user(words[1])
+            if "V1" in ret[2]:
+                uses_v1 = True
+                print("Llamante usa V1")
+            else:
+                uses_v1 = False
+                print("Llamante no usa V1")
+
             #Si no, esta pasa a ser la conexion actual
             with self.global_lock:
                 print("Llamada aceptada. Cambiando conexion de control actual...")
                 self.control_socket = connection
                 self.connected_to = words[1]
-                self.on_call_with = [addr[0],words[2]]
+                if uses_v1:
+                    self.video_buffer.set_using_v1()
+                self.on_call_with = [addr[0], words[2]]
                 self.on_hold = False
                 self.call_held = False
                 self.connection_barrier.release() #Levantamos la barrera de conexion

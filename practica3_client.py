@@ -19,7 +19,7 @@ import time
 from discovery import Discovery
 from control import Control
 from video import VideoBuffer
-from config import config_parser
+from config import ConfigParser
 import requests #Para hacer la peticion de ip externa
 
 class VideoClient(object):
@@ -64,14 +64,14 @@ class VideoClient(object):
         '''
 
         #Creamos el objeto de configuracion
-        self.config = config_parser()
+        self.config = ConfigParser()
 
         #Creamos el objeto de buffer de video
         self.buffer_video = VideoBuffer(self.config)
 
         # Creamos una variable que contenga el GUI principal
         self.app = gui("Redes2 - P2P", window_size)
-        self.app.setGuiPadding(10,10)
+        self.app.setGuiPadding(10, 10)
 
         # Preparación del interfaz
         self.app.addLabel("title", "Cliente Multimedia P2P - Redes2 ")
@@ -223,7 +223,8 @@ class VideoClient(object):
             self.app.stop()
             return
 
-        self.control = Control(self.discovery, self.config.call_timeout, self.config.user_filename)
+        self.control = Control(self.discovery, self.config.call_timeout, self.config.user_filename, self.buffer_video)
+        self.buffer_video.set_control(self.control)
 
         #Obtenemos IP externa
         try:
@@ -286,7 +287,7 @@ class VideoClient(object):
 
         #Realizamos el registro en el discovery
         print("Tratando de registrar a " + register_nick + " con clave " + password + " puerto:" + control_port + " ip:" + ip + " puerto de video: " + video_port)
-        ret = self.discovery.register_user(register_nick,password, ip, control_port)
+        ret = self.discovery.register_user(register_nick, password, ip, control_port, ["V0", "V1"])
         if not ret:
             #Error
             self.app.errorBox("Error", "No se ha podido realizar el registro correctamente. Error del servidor de descubrimiento.",parent="Login")
@@ -431,7 +432,11 @@ class VideoClient(object):
                     print("Hilo de recepción de video iniciado.")
 
                 #Actualizar informacion
-                self.app.setStatusbar("En llamada con: " + self.control.get_connected_username() ,field=0)
+                if self.buffer_video.using_v1:
+                    ver = "V1"
+                else:
+                    ver = "V0"
+                self.app.setStatusbar("En llamada con: " + self.control.get_connected_username() + " usando " + ver ,field=0)
 
                 #Popeamos el elemento a mostrar
                 _, header, frame_rec = self.buffer_video.pop_frame(self.quality_send, self.fps_send, self.resolution_send ,self.packets_lost_total,self.fps_send_min,self.fps_send_max)

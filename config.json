@@ -10,5 +10,8 @@
 	"user_filename": "usuario.json", 
 
 	"server_ip": "vega.ii.uam.es",
-	"server_port": 8000
+	"server_port": 8000,
+
+	"REPORT_REFRESH": 10.0,
+	"REPORT_WEIGHT": 0.7
 }
