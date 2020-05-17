@@ -59,3 +59,25 @@ Asimismo, se puede finalizar la llamada pulsando el botón de _colgar_ (para rea
 Hemos probado el funcionamiento tanto en local como a través de la red entre nosotros y contra clientes de otros compañeros y no hemos detectado ningún problema. También hemos probado con el script _simulate_internet.sh_, 
 en local, y se aprecian las pérdidas y retardos por lo que el programa baja la calidad como se espera. Cuando probamos en local con los 2 clientes por loopback con la corrupción de paquetes,
 funciona correctamente aunque a veces algunos mensajes TCP que no deberían perderse dan algún fallo, quizás debido a la corrupción de los paquetes de control TCP (no estamos seguros).
+
+## Fichero de configuración
+Al inicio del programa se carga el fichero config.json con distintos valores usados por el cliente. 
+
+El fichero tiene los siguientes campos:
+
+*  BUFFER_SIZE: Tamaño del buffer de recepción de frames.
+*  BUFFER_THRESHOLD: Frames a cargar en el buffer antes de reproducir video.
+*  FIXED\_DELAY\_THRESHOLD: Margen mínimo de retardo para tirar paquetes.
+*  FPS_REFRESH: Cada cuanto segundos se recalculan los fps.
+*  QUALITY_REFRESH: Cada cuanto segundos se recalcula la calidad de compresión.
+*  RESOLUTION_REFRESH: Cada cuanto segundos se recalcula la resolución a la que se envía el frame.
+*  call_timeout: Tiempo máximo (en segundos) para esperar respuesta en una llamada
+*  user_filename: Nombre del fichero del que se carga información del último usuario que uso la aplicación.
+*  server_ip: IP del server de descubrimiento.
+*  server_port: Puerto en la que se encuentra el servidor de descubrimiento.
+*  REPORT_REFRESH: Cada cuanto se envía al otro usuario un report con los paquetes perdidos.
+*  REPORT_WEIGHT: Fracción que pondera el valor de los reportes frente a los cáclulos propios. Se tiene que encontrar entre 0 y 1.
+
+Si se nota cierto delay o los fps de la cámara son bajos se recomeinda poner un BUFFER_THRESHOLD menor para reducird el delay.
+Si se nota que no llega el vídeo se puede deber a que el FIXED\_DELAY\_THRESHOLD se ha configurado muy bajo.
+
