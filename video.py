@@ -98,7 +98,7 @@ class VideoBuffer():
         self.time_last_check_fps = time.time()
         self.time_last_check_res = time.time()
         self.time_last_sent_report = time.time()
-        self.last_timestamp = time.time()
+        self.last_timestamp = 0
 
         #Vaciar el socket. Podrian quedar restos de llamadas previas, 
         #cuyos numeros de secuencia lian al contador de paquetes perdidos.
@@ -283,7 +283,9 @@ class VideoBuffer():
             timestamp: Marca de tiempo del reporte
         '''
         with self.report_lock:
-            self.last_loss_per_second = lost/(time.time()-self.last_timestamp)
+            #La primera vez simplemente cogeremos el timestamp.
+            if(self.last_timestamp != 0):
+                self.last_loss_per_second = lost/(timestamp-self.last_timestamp)
             self.last_timestamp = timestamp
 
     def set_control(self, control):
